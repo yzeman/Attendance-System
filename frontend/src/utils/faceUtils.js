@@ -1,10 +1,12 @@
 import * as faceapi from 'face-api.js';
 
-// Use CDN models instead of local files
-// This is more reliable on Render
-const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+// Try multiple sources - one will work!
+const MODEL_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/',
+  'https://unpkg.com/face-api.js@0.22.2/weights/',
+  '/models/'
+];
 
-// Track loading state
 let modelsLoaded = false;
 let loadingPromise = null;
 
@@ -21,35 +23,40 @@ export const loadModels = async () => {
     return loadingPromise;
   }
 
-  console.log('🔄 Starting to load face models from CDN:', MODEL_URL);
-  
   loadingPromise = new Promise(async (resolve) => {
-    try {
-      // Load TinyFaceDetector
-      console.log('📥 Loading TinyFaceDetector...');
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      console.log('✅ TinyFaceDetector loaded');
-      
-      // Load FaceLandmark68
-      console.log('📥 Loading FaceLandmark68...');
-      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-      console.log('✅ FaceLandmark68 loaded');
-      
-      // Load FaceRecognition
-      console.log('📥 Loading FaceRecognition...');
-      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-      console.log('✅ FaceRecognition loaded');
-      
-      modelsLoaded = true;
-      console.log('✅ ALL face models loaded successfully from CDN!');
-      resolve(true);
-    } catch (error) {
-      console.error('❌ Error loading face models from CDN:', error);
-      modelsLoaded = false;
-      resolve(false);
-    } finally {
-      loadingPromise = null;
+    console.log('🔄 Starting to load face models...');
+    
+    let loaded = false;
+    
+    // Try each source until one works
+    for (let source of MODEL_SOURCES) {
+      console.log(`📥 Trying to load from: ${source}`);
+      try {
+        await faceapi.nets.tinyFaceDetector.loadFromUri(source);
+        console.log('✅ TinyFaceDetector loaded from:', source);
+        
+        await faceapi.nets.faceLandmark68Net.loadFromUri(source);
+        console.log('✅ FaceLandmark68 loaded from:', source);
+        
+        await faceapi.nets.faceRecognitionNet.loadFromUri(source);
+        console.log('✅ FaceRecognition loaded from:', source);
+        
+        loaded = true;
+        console.log(`✅ ALL models loaded successfully from: ${source}`);
+        break; // Success - exit the loop
+      } catch (error) {
+        console.warn(`❌ Failed to load from ${source}:`, error.message);
+        // Continue to next source
+      }
     }
+
+    if (!loaded) {
+      console.error('❌ All model loading attempts failed');
+    }
+    
+    modelsLoaded = loaded;
+    loadingPromise = null;
+    resolve(loaded);
   });
 
   return loadingPromise;
