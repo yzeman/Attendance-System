@@ -1,0 +1,601 @@
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../../utils/supabaseClient';
+import { 
+  Container, Row, Col, Card, Table, Button, Form, 
+  Badge, Alert, Spinner, Modal, Tab, Tabs 
+} from 'react-bootstrap';
+
+const AdminDashboard = () => {
+  // State variables
+  const [loading, setLoading] = useState(true);
+  const [students, setStudents] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [attendanceLogs, setAttendanceLogs] = useState([]);
+  const [filteredLogs, setFilteredLogs] = useState([]);
+  const [stats, setStats] = useState({
+    totalStudents: 0,
+    totalCourses: 0,
+    totalAttendance: 0,
+    attendanceRate: 0
+  });
+  
+  // Filter states
+  const [filters, setFilters] = useState({
+    courseId: '',
+    studentId: '',
+    month: '',
+    week: '',
+    startDate: '',
+    endDate: ''
+  });
+
+  // Modal states for adding course
+  const [showCourseModal, setShowCourseModal] = useState(false);
+  const [newCourse, setNewCourse] = useState({
+    courseCode: '',
+    courseName: '',
+    lecturer: ''
+  });
+  const [modalLoading, setModalLoading] = useState(false);
+  const [modalMessage, setModalMessage] = useState('');
+
+  // User state
+  const user = JSON.parse(localStorage.getItem('user'));
+
+  // Load all data on mount
+  useEffect(() => {
+    fetchAllData();
+  }, []);
+
+  // Fetch all data
+  const fetchAllData = async () => {
+    setLoading(true);
+    try {
+      // Fetch students
+      const { data: studentsData, error: studentsError } = await supabase
+        .from('users')
+        .select('id, full_name, matric_no, email, phone, created_at')
+        .eq('role', 'student')
+        .order('full_name');
+
+      if (studentsError) throw studentsError;
+      setStudents(studentsData || []);
+
+      // Fetch courses
+      const { data: coursesData, error: coursesError } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_code');
+
+      if (coursesError) throw coursesError;
+      setCourses(coursesData || []);
+
+      // Fetch all attendance logs
+      await fetchAttendanceLogs();
+
+      // Update stats
+      const totalAttendance = attendanceLogs.length;
+      const presentCount = attendanceLogs.filter(a => a.status === 'present').length;
+      
+      setStats({
+        totalStudents: studentsData?.length || 0,
+        totalCourses: coursesData?.length || 0,
+        totalAttendance: totalAttendance,
+        attendanceRate: totalAttendance > 0 ? Math.round((presentCount / totalAttendance) * 100) : 0
+      });
+
+      // Set filtered logs to all logs initially
+      setFilteredLogs(attendanceLogs);
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch attendance logs with optional filters
+  const fetchAttendanceLogs = async (filterObj = {}) => {
+    try {
+      let query = supabase
+        .from('attendance')
+        .select(`
+          *,
+          student:student_id(id, full_name, matric_no),
+          course:course_id(id, course_code, course_name)
+        `)
+        .order('date', { ascending: false });
+
+      // Apply filters
+      if (filterObj.courseId) {
+        query = query.eq('course_id', filterObj.courseId);
+      }
+      if (filterObj.studentId) {
+        query = query.eq('student_id', filterObj.studentId);
+      }
+      if (filterObj.month) {
+        const start = new Date(filterObj.month + '-01');
+        const end = new Date(filterObj.month + '-01');
+        end.setMonth(end.getMonth() + 1);
+        query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
+      }
+      if (filterObj.week) {
+        const [year, weekNum] = filterObj.week.split('-').map(Number);
+        const start = getStartOfWeek(year, weekNum);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 6);
+        query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
+      }
+      if (filterObj.startDate && filterObj.endDate) {
+        query = query
+          .gte('date', new Date(filterObj.startDate).toISOString())
+          .lte('date', new Date(filterObj.endDate).toISOString());
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      setAttendanceLogs(data || []);
+      setFilteredLogs(data || []);
+      return data || [];
+
+    } catch (error) {
+      console.error('Error fetching attendance logs:', error);
+      return [];
+    }
+  };
+
+  // Helper: Get start of week
+  const getStartOfWeek = (year, weekNum) => {
+    const jan1 = new Date(year, 0, 1);
+    const daysOffset = (jan1.getDay() + 6) % 7;
+    const firstMonday = new Date(jan1);
+    firstMonday.setDate(jan1.getDate() - daysOffset + (weekNum - 1) * 7);
+    return firstMonday;
+  };
+
+  // Handle filter changes
+  const handleFilterChange = (e) => {
+    const { name, value } = e.target;
+    setFilters({ ...filters, [name]: value });
+  };
+
+  // Apply filters
+  const applyFilters = async () => {
+    const activeFilters = {};
+    if (filters.courseId) activeFilters.courseId = filters.courseId;
+    if (filters.studentId) activeFilters.studentId = filters.studentId;
+    if (filters.month) activeFilters.month = filters.month;
+    if (filters.week) activeFilters.week = filters.week;
+    if (filters.startDate && filters.endDate) {
+      activeFilters.startDate = filters.startDate;
+      activeFilters.endDate = filters.endDate;
+    }
+
+    await fetchAttendanceLogs(activeFilters);
+  };
+
+  // Reset filters
+  const resetFilters = async () => {
+    setFilters({
+      courseId: '',
+      studentId: '',
+      month: '',
+      week: '',
+      startDate: '',
+      endDate: ''
+    });
+    await fetchAttendanceLogs({});
+  };
+
+  // Handle adding new course
+  const handleAddCourse = async () => {
+    setModalLoading(true);
+    setModalMessage('');
+
+    try {
+      const { error } = await supabase
+        .from('courses')
+        .insert({
+          course_code: newCourse.courseCode.toUpperCase(),
+          course_name: newCourse.courseName,
+          lecturer: newCourse.lecturer
+        });
+
+      if (error) throw error;
+
+      setModalMessage('✅ Course added successfully!');
+      setNewCourse({ courseCode: '', courseName: '', lecturer: '' });
+      
+      // Refresh courses
+      const { data: coursesData } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_code');
+      setCourses(coursesData || []);
+
+      setTimeout(() => {
+        setShowCourseModal(false);
+        setModalMessage('');
+        setModalLoading(false);
+      }, 1500);
+
+    } catch (error) {
+      setModalMessage('❌ ' + error.message);
+      setModalLoading(false);
+    }
+  };
+
+  // Export attendance logs to CSV
+  const exportCSV = () => {
+    if (filteredLogs.length === 0) {
+      alert('No data to export.');
+      return;
+    }
+
+    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Date', 'Status'];
+    const rows = filteredLogs.map(log => [
+      log.student?.full_name || 'N/A',
+      log.student?.matric_no || 'N/A',
+      log.course?.course_code || 'N/A',
+      log.course?.course_name || 'N/A',
+      new Date(log.date).toLocaleString(),
+      log.status || 'present'
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `attendance_logs_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  if (loading) {
+    return (
+      <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+        <Spinner animation="border" variant="primary" />
+      </Container>
+    );
+  }
+
+  return (
+    <Container fluid className="mt-4">
+      <div className="animate-fade-in">
+        <div className="d-flex justify-content-between align-items-center mb-4">
+          <h2>📊 Admin Dashboard</h2>
+          <div>
+            <span className="badge bg-primary me-2">Admin: {user?.full_name}</span>
+          </div>
+        </div>
+
+        {/* Statistics Cards */}
+        <Row className="mb-4">
+          <Col md={3}>
+            <Card className="stat-card">
+              <h2>{stats.totalStudents}</h2>
+              <p>👨‍🎓 Total Students</p>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
+              <h2>{stats.totalCourses}</h2>
+              <p>📚 Total Courses</p>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
+              <h2>{stats.totalAttendance}</h2>
+              <p>📋 Total Attendance Records</p>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
+              <h2>{stats.attendanceRate}%</h2>
+              <p>📈 Overall Attendance Rate</p>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Tabs for different sections */}
+        <Tabs defaultActiveKey="attendance" className="mb-4" fill>
+          <Tab eventKey="attendance" title="📋 Attendance Logs">
+            <Card className="p-3 shadow">
+              {/* Filters */}
+              <div className="mb-3">
+                <h5>Filter Attendance</h5>
+                <Row className="g-2">
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Course</Form.Label>
+                      <Form.Select
+                        name="courseId"
+                        value={filters.courseId}
+                        onChange={handleFilterChange}
+                      >
+                        <option value="">All Courses</option>
+                        {courses.map(c => (
+                          <option key={c.id} value={c.id}>
+                            {c.course_code} - {c.course_name}
+                          </option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Student</Form.Label>
+                      <Form.Select
+                        name="studentId"
+                        value={filters.studentId}
+                        onChange={handleFilterChange}
+                      >
+                        <option value="">All Students</option>
+                        {students.map(s => (
+                          <option key={s.id} value={s.id}>
+                            {s.full_name} ({s.matric_no})
+                          </option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={2}>
+                    <Form.Group>
+                      <Form.Label>Month</Form.Label>
+                      <Form.Control
+                        type="month"
+                        name="month"
+                        value={filters.month}
+                        onChange={handleFilterChange}
+                      />
+                    </Form.Group>
+                  </Col>
+                  <Col md={2}>
+                    <Form.Group>
+                      <Form.Label>Week (YYYY-WW)</Form.Label>
+                      <Form.Control
+                        type="text"
+                        name="week"
+                        placeholder="2025-12"
+                        value={filters.week}
+                        onChange={handleFilterChange}
+                      />
+                    </Form.Group>
+                  </Col>
+                  <Col md={12} className="mt-2">
+                    <Row>
+                      <Col md={3}>
+                        <Form.Group>
+                          <Form.Label>Start Date</Form.Label>
+                          <Form.Control
+                            type="date"
+                            name="startDate"
+                            value={filters.startDate}
+                            onChange={handleFilterChange}
+                          />
+                        </Form.Group>
+                      </Col>
+                      <Col md={3}>
+                        <Form.Group>
+                          <Form.Label>End Date</Form.Label>
+                          <Form.Control
+                            type="date"
+                            name="endDate"
+                            value={filters.endDate}
+                            onChange={handleFilterChange}
+                          />
+                        </Form.Group>
+                      </Col>
+                      <Col md={6} className="d-flex align-items-end gap-2">
+                        <Button variant="primary" onClick={applyFilters}>
+                          Apply Filters
+                        </Button>
+                        <Button variant="secondary" onClick={resetFilters}>
+                          Reset
+                        </Button>
+                        <Button variant="success" onClick={exportCSV}>
+                          📥 Export CSV
+                        </Button>
+                      </Col>
+                    </Row>
+                  </Col>
+                </Row>
+              </div>
+
+              {/* Attendance Table */}
+              <div className="table-container">
+                <h6 className="mb-2">
+                  Showing {filteredLogs.length} record(s)
+                </h6>
+                <Table striped bordered hover responsive>
+                  <thead>
+                    <tr>
+                      <th>Student</th>
+                      <th>Matric No</th>
+                      <th>Course</th>
+                      <th>Date</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLogs.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="text-center text-muted">
+                          No attendance records found.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredLogs.map((log) => (
+                        <tr key={log.id}>
+                          <td>{log.student?.full_name || 'N/A'}</td>
+                          <td>{log.student?.matric_no || 'N/A'}</td>
+                          <td>{log.course?.course_code || 'N/A'}</td>
+                          <td>{new Date(log.date).toLocaleString()}</td>
+                          <td>
+                            <Badge 
+                              bg={log.status === 'present' ? 'success' : 'danger'}
+                              className="px-3 py-2"
+                            >
+                              {log.status === 'present' ? '✅ Present' : '❌ Absent'}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+            </Card>
+          </Tab>
+
+          <Tab eventKey="courses" title="📚 Courses">
+            <Card className="p-3 shadow">
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h5>Manage Courses</h5>
+                <Button variant="primary" onClick={() => setShowCourseModal(true)}>
+                  ➕ Add New Course
+                </Button>
+              </div>
+              <div className="table-container">
+                <Table striped bordered hover responsive>
+                  <thead>
+                    <tr>
+                      <th>Course Code</th>
+                      <th>Course Name</th>
+                      <th>Lecturer</th>
+                      <th>Enrolled Students</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {courses.length === 0 ? (
+                      <tr>
+                        <td colSpan="4" className="text-center text-muted">
+                          No courses found.
+                        </td>
+                      </tr>
+                    ) : (
+                      courses.map((course) => (
+                        <tr key={course.id}>
+                          <td><strong>{course.course_code}</strong></td>
+                          <td>{course.course_name}</td>
+                          <td>{course.lecturer || 'N/A'}</td>
+                          <td>
+                            <Badge bg="info">
+                              {students.filter(s => s.enrolled_courses?.includes(course.id)).length}
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+            </Card>
+          </Tab>
+
+          <Tab eventKey="students" title="👨‍🎓 Students">
+            <Card className="p-3 shadow">
+              <h5 className="mb-3">All Students</h5>
+              <div className="table-container">
+                <Table striped bordered hover responsive>
+                  <thead>
+                    <tr>
+                      <th>Full Name</th>
+                      <th>Matric No</th>
+                      <th>Email</th>
+                      <th>Phone</th>
+                      <th>Registered</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students.length === 0 ? (
+                      <tr>
+                        <td colSpan="5" className="text-center text-muted">
+                          No students registered.
+                        </td>
+                      </tr>
+                    ) : (
+                      students.map((student) => (
+                        <tr key={student.id}>
+                          <td><strong>{student.full_name}</strong></td>
+                          <td>{student.matric_no}</td>
+                          <td>{student.email}</td>
+                          <td>{student.phone || 'N/A'}</td>
+                          <td>{new Date(student.created_at).toLocaleDateString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+            </Card>
+          </Tab>
+        </Tabs>
+
+        {/* Add Course Modal */}
+        <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
+          <Modal.Header closeButton>
+            <Modal.Title>Add New Course</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {modalMessage && (
+              <Alert variant={modalMessage.startsWith('✅') ? 'success' : 'danger'}>
+                {modalMessage}
+              </Alert>
+            )}
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Course Code</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., SWD101"
+                  value={newCourse.courseCode}
+                  onChange={(e) => setNewCourse({ ...newCourse, courseCode: e.target.value })}
+                  disabled={modalLoading}
+                  required
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Course Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., Introduction to Web Development"
+                  value={newCourse.courseName}
+                  onChange={(e) => setNewCourse({ ...newCourse, courseName: e.target.value })}
+                  disabled={modalLoading}
+                  required
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Lecturer</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., Mr. Nta Lawal"
+                  value={newCourse.lecturer}
+                  onChange={(e) => setNewCourse({ ...newCourse, lecturer: e.target.value })}
+                  disabled={modalLoading}
+                />
+              </Form.Group>
+            </Form>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowCourseModal(false)} disabled={modalLoading}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={handleAddCourse} disabled={modalLoading}>
+              {modalLoading ? <Spinner size="sm" /> : 'Add Course'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+      </div>
+    </Container>
+  );
+};
+
+export default AdminDashboard;
