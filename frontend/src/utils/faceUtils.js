@@ -9,28 +9,38 @@ let loadingPromise = null;
 
 export const loadModels = async () => {
   // If already loaded, return immediately
-  if (modelsLoaded) return true;
+  if (modelsLoaded) {
+    console.log('✅ Models already loaded');
+    return true;
+  }
   
   // If already loading, wait for it
-  if (loadingPromise) return loadingPromise;
+  if (loadingPromise) {
+    console.log('⏳ Models already loading, waiting...');
+    return loadingPromise;
+  }
 
-  console.log('🔄 Starting to load face models...');
+  console.log('🔄 Starting to load face models from:', MODEL_URL);
   
   loadingPromise = new Promise(async (resolve) => {
     try {
-      console.log('Loading from:', MODEL_URL);
-      
+      // Load TinyFaceDetector
+      console.log('📥 Loading TinyFaceDetector...');
       await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
       console.log('✅ TinyFaceDetector loaded');
       
+      // Load FaceLandmark68
+      console.log('📥 Loading FaceLandmark68...');
       await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
       console.log('✅ FaceLandmark68 loaded');
       
+      // Load FaceRecognition
+      console.log('📥 Loading FaceRecognition...');
       await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
       console.log('✅ FaceRecognition loaded');
       
       modelsLoaded = true;
-      console.log('✅ All face models loaded successfully!');
+      console.log('✅ ALL face models loaded successfully!');
       resolve(true);
     } catch (error) {
       console.error('❌ Error loading face models:', error);
@@ -44,11 +54,16 @@ export const loadModels = async () => {
   return loadingPromise;
 };
 
-// Function to check if models are loaded
-export const areModelsReady = () => modelsLoaded;
+// Function to check if models are ready
+export const areModelsLoaded = () => modelsLoaded;
 
-// Rest of the file stays the same...
+// Detect face and extract descriptor from video element
 export const getFaceDescriptor = async (videoElement) => {
+  if (!modelsLoaded) {
+    console.warn('⚠️ Models not loaded yet!');
+    return null;
+  }
+
   try {
     const detection = await faceapi
       .detectSingleFace(videoElement, new faceapi.TinyFaceDetectorOptions({
@@ -58,7 +73,12 @@ export const getFaceDescriptor = async (videoElement) => {
       .withFaceLandmarks()
       .withFaceDescriptor();
 
-    if (!detection) return null;
+    if (!detection) {
+      console.log('👤 No face detected');
+      return null;
+    }
+
+    console.log('✅ Face detected with descriptor');
     return Array.from(detection.descriptor);
   } catch (error) {
     console.error('Error detecting face:', error);
@@ -66,14 +86,45 @@ export const getFaceDescriptor = async (videoElement) => {
   }
 };
 
+// Compare two face descriptors using Euclidean distance
 export const compareDescriptors = (descriptor1, descriptor2, threshold = 0.6) => {
-  if (!descriptor1 || !descriptor2) return false;
-  if (descriptor1.length !== descriptor2.length) return false;
+  if (!descriptor1 || !descriptor2) {
+    console.warn('⚠️ Missing descriptors for comparison');
+    return false;
+  }
+  if (descriptor1.length !== descriptor2.length) {
+    console.warn('⚠️ Descriptor lengths do not match');
+    return false;
+  }
 
   let sum = 0;
   for (let i = 0; i < descriptor1.length; i++) {
     sum += Math.pow(descriptor1[i] - descriptor2[i], 2);
   }
   const distance = Math.sqrt(sum);
+  
+  console.log(`📊 Face distance: ${distance.toFixed(4)} (threshold: ${threshold})`);
   return distance < threshold;
+};
+
+// Capture multiple face samples for enrolment
+export const captureFaceSamples = async (videoElement, numberOfSamples = 3) => {
+  console.log(`📸 Capturing ${numberOfSamples} face samples...`);
+  const samples = [];
+  let attempts = 0;
+  const maxAttempts = numberOfSamples * 5;
+
+  while (samples.length < numberOfSamples && attempts < maxAttempts) {
+    attempts++;
+    const descriptor = await getFaceDescriptor(videoElement);
+    if (descriptor) {
+      samples.push(descriptor);
+      console.log(`✅ Sample ${samples.length}/${numberOfSamples} captured`);
+    }
+    // Wait a bit before next capture
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+
+  console.log(`📸 Captured ${samples.length} face samples`);
+  return samples;
 };
