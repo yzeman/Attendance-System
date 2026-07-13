@@ -1,6 +1,6 @@
 import * as faceapi from 'face-api.js';
 
-// Use the models from your Vercel deployment
+// Use the models from your Render deployment
 const MODEL_URL = '/models/';
 
 // Track loading state
@@ -121,7 +121,6 @@ export const captureFaceSamples = async (videoElement, numberOfSamples = 3) => {
       samples.push(descriptor);
       console.log(`✅ Sample ${samples.length}/${numberOfSamples} captured`);
     }
-    // Wait a bit before next capture
     await new Promise(resolve => setTimeout(resolve, 300));
   }
 
