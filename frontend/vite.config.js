@@ -9,6 +9,14 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true
-  }
+    sourcemap: true,
+    // Ensure public directory is copied
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
+  },
+  // This is the key - it ensures the public folder is copied to dist
+  publicDir: 'public'
 })
