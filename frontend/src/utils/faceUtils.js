@@ -1,23 +1,53 @@
 import * as faceapi from 'face-api.js';
 
-// Path to the model files (inside public/models/)
-const MODEL_URL = '/models';
+// Use the models from your Vercel deployment
+const MODEL_URL = '/models/';
 
-// Load all face-api.js models
+// Track loading state
+let modelsLoaded = false;
+let loadingPromise = null;
+
 export const loadModels = async () => {
-  try {
-    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-    await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-    console.log('✅ Face models loaded successfully');
-    return true;
-  } catch (error) {
-    console.error('❌ Error loading face models:', error);
-    return false;
-  }
+  // If already loaded, return immediately
+  if (modelsLoaded) return true;
+  
+  // If already loading, wait for it
+  if (loadingPromise) return loadingPromise;
+
+  console.log('🔄 Starting to load face models...');
+  
+  loadingPromise = new Promise(async (resolve) => {
+    try {
+      console.log('Loading from:', MODEL_URL);
+      
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      console.log('✅ TinyFaceDetector loaded');
+      
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      console.log('✅ FaceLandmark68 loaded');
+      
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      console.log('✅ FaceRecognition loaded');
+      
+      modelsLoaded = true;
+      console.log('✅ All face models loaded successfully!');
+      resolve(true);
+    } catch (error) {
+      console.error('❌ Error loading face models:', error);
+      modelsLoaded = false;
+      resolve(false);
+    } finally {
+      loadingPromise = null;
+    }
+  });
+
+  return loadingPromise;
 };
 
-// Detect face and extract descriptor from video element
+// Function to check if models are loaded
+export const areModelsReady = () => modelsLoaded;
+
+// Rest of the file stays the same...
 export const getFaceDescriptor = async (videoElement) => {
   try {
     const detection = await faceapi
@@ -28,11 +58,7 @@ export const getFaceDescriptor = async (videoElement) => {
       .withFaceLandmarks()
       .withFaceDescriptor();
 
-    if (!detection) {
-      return null; // No face detected
-    }
-
-    // Convert Float32Array to regular array for storage
+    if (!detection) return null;
     return Array.from(detection.descriptor);
   } catch (error) {
     console.error('Error detecting face:', error);
@@ -40,7 +66,6 @@ export const getFaceDescriptor = async (videoElement) => {
   }
 };
 
-// Compare two face descriptors using Euclidean distance
 export const compareDescriptors = (descriptor1, descriptor2, threshold = 0.6) => {
   if (!descriptor1 || !descriptor2) return false;
   if (descriptor1.length !== descriptor2.length) return false;
@@ -50,39 +75,5 @@ export const compareDescriptors = (descriptor1, descriptor2, threshold = 0.6) =>
     sum += Math.pow(descriptor1[i] - descriptor2[i], 2);
   }
   const distance = Math.sqrt(sum);
-  
-  // Lower distance = better match
-  // 0.6 is a typical threshold for face-api.js
   return distance < threshold;
-};
-
-// Capture multiple face samples for enrolment
-export const captureFaceSamples = async (videoElement, numberOfSamples = 3) => {
-  const samples = [];
-  let attempts = 0;
-  const maxAttempts = numberOfSamples * 5;
-
-  while (samples.length < numberOfSamples && attempts < maxAttempts) {
-    attempts++;
-    const descriptor = await getFaceDescriptor(videoElement);
-    if (descriptor) {
-      samples.push(descriptor);
-    }
-    // Wait a bit before next capture
-    await new Promise(resolve => setTimeout(resolve, 300));
-  }
-
-  return samples;
-};
-
-// Check if models are loaded
-export const areModelsLoaded = async () => {
-  try {
-    const tinyFaceDetector = await faceapi.nets.tinyFaceDetector.isLoaded();
-    const faceLandmark68 = await faceapi.nets.faceLandmark68Net.isLoaded();
-    const faceRecognition = await faceapi.nets.faceRecognitionNet.isLoaded();
-    return tinyFaceDetector && faceLandmark68 && faceRecognition;
-  } catch {
-    return false;
-  }
 };
