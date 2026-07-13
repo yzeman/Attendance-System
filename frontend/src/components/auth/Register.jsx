@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../../utils/supabaseClient';
-import { loadModels, getFaceDescriptor, areModelsLoaded } from '../../utils/faceUtils';
+import { loadModels, getFaceDescriptor } from '../../utils/faceUtils';
 import { Container, Row, Col, Form, Button, Card, Alert, Spinner } from 'react-bootstrap';
 
 const Register = () => {
@@ -19,22 +19,49 @@ const Register = () => {
   const [faceDescriptors, setFaceDescriptors] = useState([]);
   const [capturing, setCapturing] = useState(false);
   const [modelsReady, setModelsReady] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const videoRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Load face recognition models
-    const initModels = async () => {
-      const loaded = await loadModels();
+    const init = async () => {
+      console.log('🔵 Register page mounted - starting...');
+      
+      // 1. Start webcam first
+      await startWebcam();
+      
+      // 2. Load models with retry
+      setModelsLoading(true);
+      console.log('🔵 Loading face models...');
+      
+      let loaded = false;
+      let attempts = 0;
+      const maxAttempts = 3;
+      
+      while (!loaded && attempts < maxAttempts) {
+        attempts++;
+        console.log(`🔵 Loading attempt ${attempts}...`);
+        loaded = await loadModels();
+        
+        if (!loaded && attempts < maxAttempts) {
+          console.log('⏳ Waiting 2 seconds before retry...');
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+      
       setModelsReady(loaded);
+      setModelsLoading(false);
+      
+      if (loaded) {
+        console.log('✅ Models are ready!');
+      } else {
+        console.log('❌ Models failed after 3 attempts');
+      }
     };
-    initModels();
+    
+    init();
 
-    // Start webcam
-    startWebcam();
-
-    // Cleanup
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
         videoRef.current.srcObject.getTracks().forEach(track => track.stop());
@@ -50,6 +77,7 @@ const Register = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setWebcamStarted(true);
+        console.log('✅ Webcam started');
       }
     } catch (err) {
       console.error('Webcam error:', err);
@@ -302,7 +330,7 @@ const Register = () => {
                       <Button
                         variant="secondary"
                         onClick={handleCaptureFace}
-                        disabled={capturing || !modelsReady || !webcamStarted}
+                        disabled={capturing || !modelsReady || !webcamStarted || modelsLoading}
                       >
                         {capturing ? (
                           <>
@@ -321,9 +349,19 @@ const Register = () => {
                       >
                         🔄 Reset Samples
                       </Button>
-                      {!modelsReady && (
+                      {modelsLoading && (
                         <div className="text-warning small mt-2">
-                          ⏳ Loading face models...
+                          ⏳ Loading face models... Please wait (10-15 seconds)
+                        </div>
+                      )}
+                      {!modelsLoading && !modelsReady && (
+                        <div className="text-danger small mt-2">
+                          ❌ Models failed to load. Please refresh.
+                        </div>
+                      )}
+                      {modelsReady && (
+                        <div className="text-success small mt-2">
+                          ✅ Face models ready!
                         </div>
                       )}
                       {faceDescriptors.length >= 2 && (
@@ -342,7 +380,7 @@ const Register = () => {
                 variant="primary"
                 type="submit"
                 className="w-100"
-                disabled={loading || faceDescriptors.length < 2}
+                disabled={loading || faceDescriptors.length < 2 || !modelsReady || modelsLoading}
               >
                 {loading ? (
                   <>
