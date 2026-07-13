@@ -1,7 +1,8 @@
 import * as faceapi from 'face-api.js';
 
-// Use the models from your Render deployment
-const MODEL_URL = '/models/';
+// Use CDN models instead of local files
+// This is more reliable on Render
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
 
 // Track loading state
 let modelsLoaded = false;
@@ -20,7 +21,7 @@ export const loadModels = async () => {
     return loadingPromise;
   }
 
-  console.log('🔄 Starting to load face models from:', MODEL_URL);
+  console.log('🔄 Starting to load face models from CDN:', MODEL_URL);
   
   loadingPromise = new Promise(async (resolve) => {
     try {
@@ -40,10 +41,10 @@ export const loadModels = async () => {
       console.log('✅ FaceRecognition loaded');
       
       modelsLoaded = true;
-      console.log('✅ ALL face models loaded successfully!');
+      console.log('✅ ALL face models loaded successfully from CDN!');
       resolve(true);
     } catch (error) {
-      console.error('❌ Error loading face models:', error);
+      console.error('❌ Error loading face models from CDN:', error);
       modelsLoaded = false;
       resolve(false);
     } finally {
