@@ -21,32 +21,44 @@ const Register = () => {
   const [modelsReady, setModelsReady] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
+  const [debugMessage, setDebugMessage] = useState('⏳ Initializing...');
   const videoRef = useRef(null);
   const navigate = useNavigate();
 
   useEffect(() => {
     const init = async () => {
+      setDebugMessage('🔵 Starting registration page...');
       console.log('🔵 Register page mounted - starting...');
       
       // 1. Start webcam first
+      setDebugMessage('📷 Starting webcam...');
       await startWebcam();
       
       // 2. Load models with retry
       setModelsLoading(true);
+      setDebugMessage('🔄 Loading face models (attempt 1/5)...');
       console.log('🔵 Loading face models...');
       
       let loaded = false;
       let attempts = 0;
-      const maxAttempts = 3;
+      const maxAttempts = 5;
       
       while (!loaded && attempts < maxAttempts) {
         attempts++;
+        setDebugMessage(`🔄 Loading attempt ${attempts} of ${maxAttempts}...`);
         console.log(`🔵 Loading attempt ${attempts}...`);
-        loaded = await loadModels();
+        
+        try {
+          loaded = await loadModels();
+        } catch (err) {
+          console.error('Attempt error:', err);
+          loaded = false;
+        }
         
         if (!loaded && attempts < maxAttempts) {
-          console.log('⏳ Waiting 2 seconds before retry...');
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          setDebugMessage(`⏳ Waiting 3 seconds before retry ${attempts + 1}...`);
+          console.log('⏳ Waiting 3 seconds before retry...');
+          await new Promise(resolve => setTimeout(resolve, 3000));
         }
       }
       
@@ -54,9 +66,12 @@ const Register = () => {
       setModelsLoading(false);
       
       if (loaded) {
+        setDebugMessage('✅ Models are ready! You can now capture faces.');
         console.log('✅ Models are ready!');
       } else {
-        console.log('❌ Models failed after 3 attempts');
+        setDebugMessage('❌ Models failed after 5 attempts. Please refresh the page.');
+        console.log('❌ Models failed after 5 attempts');
+        setError('Face models failed to load. Please refresh the page and try again.');
       }
     };
     
@@ -77,10 +92,12 @@ const Register = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setWebcamStarted(true);
+        setDebugMessage('✅ Webcam started!');
         console.log('✅ Webcam started');
       }
     } catch (err) {
       console.error('Webcam error:', err);
+      setDebugMessage('❌ Webcam error: ' + err.message);
       setError('Unable to access webcam. Please allow camera permissions.');
     }
   };
@@ -97,16 +114,20 @@ const Register = () => {
     }
 
     setCapturing(true);
+    setDebugMessage('📸 Capturing face...');
     try {
       const descriptor = await getFaceDescriptor(videoRef.current);
       if (descriptor) {
         setFaceDescriptors(prev => [...prev, descriptor]);
         setSuccess(`✅ Face captured! (${faceDescriptors.length + 1}/3 samples)`);
+        setDebugMessage(`✅ Captured ${faceDescriptors.length + 1} samples`);
         setError('');
       } else {
+        setDebugMessage('❌ No face detected. Please look straight at the camera.');
         setError('❌ No face detected. Please look straight at the camera.');
       }
     } catch (err) {
+      setDebugMessage('❌ Error: ' + err.message);
       setError('Error capturing face: ' + err.message);
     }
     setCapturing(false);
@@ -121,6 +142,7 @@ const Register = () => {
     setError('');
     setSuccess('');
     setLoading(true);
+    setDebugMessage('📝 Submitting registration...');
 
     // Validate passwords match
     if (formData.password !== formData.confirmPassword) {
@@ -138,6 +160,7 @@ const Register = () => {
 
     try {
       // 1. Sign up with Supabase Auth
+      setDebugMessage('🔐 Creating account...');
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -156,6 +179,7 @@ const Register = () => {
       }
 
       // 2. Insert user profile into our 'users' table
+      setDebugMessage('💾 Saving profile...');
       const { error: insertError } = await supabase
         .from('users')
         .insert({
@@ -169,6 +193,7 @@ const Register = () => {
 
       if (insertError) throw insertError;
 
+      setDebugMessage('✅ Registration successful!');
       setSuccess('✅ Registration successful! You can now login.');
       setFormData({
         fullName: '',
@@ -186,6 +211,7 @@ const Register = () => {
       }, 2000);
 
     } catch (err) {
+      setDebugMessage('❌ Error: ' + err.message);
       setError(err.message || 'Registration failed. Please try again.');
     }
     setLoading(false);
@@ -193,6 +219,7 @@ const Register = () => {
 
   const handleResetFace = () => {
     setFaceDescriptors([]);
+    setDebugMessage('🔄 Face samples reset');
     setSuccess('Face samples reset. Please capture new samples.');
   };
 
@@ -205,6 +232,11 @@ const Register = () => {
               <h2 className="fw-bold">Student Registration</h2>
               <p className="text-muted">Create your account with face enrolment</p>
             </div>
+
+            {/* 🔍 Debug Message Box - Shows what's happening */}
+            <Alert variant="info" className="mb-3">
+              <strong>🔍 Status:</strong> {debugMessage}
+            </Alert>
 
             {error && <Alert variant="danger">{error}</Alert>}
             {success && <Alert variant="success">{success}</Alert>}
