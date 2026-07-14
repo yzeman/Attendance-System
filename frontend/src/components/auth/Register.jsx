@@ -22,11 +22,10 @@ const Register = () => {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [debugMessage, setDebugMessage] = useState('⏳ Initializing...');
-  const [debugDetails, setDebugDetails] = useState([]); // Array of debug steps
+  const [debugDetails, setDebugDetails] = useState([]);
   const videoRef = useRef(null);
   const navigate = useNavigate();
 
-  // Add debug log function
   const addDebugLog = (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString();
     const logEntry = { timestamp, message, data: data ? JSON.stringify(data, null, 2) : null };
@@ -38,12 +37,8 @@ const Register = () => {
   useEffect(() => {
     const init = async () => {
       addDebugLog('🔵 Register page mounted - starting...');
-      
-      // 1. Start webcam first
-      addDebugLog('📷 Starting webcam...');
       await startWebcam();
       
-      // 2. Load models with retry
       setModelsLoading(true);
       addDebugLog('🔄 Loading face models (attempt 1/5)...');
       
@@ -146,14 +141,12 @@ const Register = () => {
     setLoading(true);
     addDebugLog('📝 Submitting registration...');
 
-    // Validate passwords match
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match.');
       setLoading(false);
       return;
     }
 
-    // Validate face samples
     if (faceDescriptors.length < 2) {
       setError('Please capture at least 2 face samples for accurate recognition.');
       setLoading(false);
@@ -181,20 +174,12 @@ const Register = () => {
 
       addDebugLog('✅ Auth account created! User ID: ' + authData.user.id);
 
-      if (!authData.user) {
-        throw new Error('Registration failed. Please try again.');
-      }
+      // ⭐ KEY FIX: Wait 2 seconds for auth to propagate
+      addDebugLog('⏳ Waiting 2 seconds for auth to propagate...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Step 2: Insert into users table
-      addDebugLog('💾 Step 2: Inserting into users table...', {
-        id: authData.user.id,
-        full_name: formData.fullName,
-        matric_no: formData.matricNo,
-        phone: formData.phone,
-        email: formData.email,
-        face_descriptors_length: faceDescriptors.length,
-        face_descriptors_sample: faceDescriptors[0] ? '[...' + faceDescriptors[0].length + ' numbers]' : 'empty'
-      });
+      addDebugLog('💾 Step 2: Inserting into users table...');
 
       const insertData = {
         id: authData.user.id,
@@ -237,7 +222,6 @@ const Register = () => {
       });
       setFaceDescriptors([]);
 
-      // Redirect to login after 2 seconds
       setTimeout(() => {
         navigate('/login');
       }, 2000);
@@ -270,12 +254,10 @@ const Register = () => {
               <p className="text-muted">Create your account with face enrolment</p>
             </div>
 
-            {/* 🔍 Debug Message Box - Shows what's happening */}
             <Alert variant="info" className="mb-3">
               <strong>🔍 Status:</strong> {debugMessage}
             </Alert>
 
-            {/* 📋 Debug Details Log */}
             <div className="mb-3" style={{ maxHeight: '150px', overflowY: 'auto', background: '#f8f9fa', borderRadius: '5px', padding: '10px', fontSize: '12px', fontFamily: 'monospace' }}>
               <strong>📋 Debug Log:</strong>
               {debugDetails.map((log, index) => (
