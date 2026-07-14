@@ -20,6 +20,8 @@ const StudentDashboard = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
+      console.log('🔵 Student: Fetching data for:', user?.email);
+      
       // 1. Fetch student's attendance records
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
@@ -27,8 +29,11 @@ const StudentDashboard = () => {
         .eq('student_id', user.id)
         .order('date', { ascending: false });
 
-      if (attError) throw attError;
-
+      if (attError) {
+        console.error('❌ Attendance fetch error:', attError);
+      } else {
+        console.log('✅ Attendance fetched:', attendanceData?.length || 0, 'records');
+      }
       setAttendance(attendanceData || []);
 
       // 2. Fetch student's enrolled courses
@@ -38,16 +43,29 @@ const StudentDashboard = () => {
         .eq('id', user.id)
         .single();
 
-      if (userError) throw userError;
+      if (userError) {
+        console.error('❌ User fetch error:', userError);
+      } else {
+        console.log('✅ User data fetched:', userData);
+      }
 
       if (userData?.enrolled_courses?.length) {
+        console.log('🔵 Enrolled course IDs:', userData.enrolled_courses);
+        
         const { data: coursesData, error: courseError } = await supabase
           .from('courses')
           .select('*')
           .in('id', userData.enrolled_courses);
 
-        if (courseError) throw courseError;
+        if (courseError) {
+          console.error('❌ Courses fetch error:', courseError);
+        } else {
+          console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
+        }
         setCourses(coursesData || []);
+      } else {
+        console.log('⚠️ No enrolled courses found');
+        setCourses([]);
       }
 
       // 3. Calculate statistics
@@ -62,7 +80,7 @@ const StudentDashboard = () => {
       });
 
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('❌ Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -122,6 +140,33 @@ const StudentDashboard = () => {
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
               <h2>{stats.attendancePercentage}%</h2>
               <p>Overall Attendance</p>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* My Courses Section - NEW */}
+        <Row className="mb-4">
+          <Col md={12}>
+            <Card className="p-3">
+              <h5 className="mb-3">📚 My Enrolled Courses</h5>
+              {courses.length === 0 ? (
+                <Alert variant="info">
+                  You are not enrolled in any courses yet. Please contact your lecturer or admin.
+                </Alert>
+              ) : (
+                <div className="d-flex flex-wrap gap-2">
+                  {courses.map((course) => (
+                    <Badge 
+                      key={course.id} 
+                      bg="primary" 
+                      className="p-3"
+                      style={{ fontSize: '1rem' }}
+                    >
+                      {course.course_code} - {course.course_name}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </Card>
           </Col>
         </Row>
