@@ -58,31 +58,47 @@ const AdminDashboard = () => {
   const fetchAllData = async () => {
     setLoading(true);
     try {
+      console.log('🔵 Admin: Fetching all data...');
+      console.log('🔵 Admin User:', user);
+      
       // Fetch students
+      console.log('🔵 Fetching students with role=student...');
       const { data: studentsData, error: studentsError } = await supabase
         .from('users')
-        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses')
+        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role')
         .eq('role', 'student')
         .order('full_name');
 
-      if (studentsError) throw studentsError;
+      if (studentsError) {
+        console.error('❌ Students fetch error:', studentsError);
+        console.error('❌ Error details:', studentsError.message, studentsError.code);
+      } else {
+        console.log('✅ Students fetched:', studentsData?.length || 0, 'students');
+        console.log('📋 Student data:', studentsData);
+      }
       setStudents(studentsData || []);
 
       // Fetch courses
+      console.log('🔵 Fetching courses...');
       const { data: coursesData, error: coursesError } = await supabase
         .from('courses')
         .select('*')
         .order('course_code');
 
-      if (coursesError) throw coursesError;
+      if (coursesError) {
+        console.error('❌ Courses fetch error:', coursesError);
+      } else {
+        console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
+      }
       setCourses(coursesData || []);
 
       // Fetch all attendance logs
-      await fetchAttendanceLogs();
+      const logs = await fetchAttendanceLogs();
+      console.log('✅ Attendance logs fetched:', logs?.length || 0, 'records');
 
       // Update stats
-      const totalAttendance = attendanceLogs.length;
-      const presentCount = attendanceLogs.filter(a => a.status === 'present').length;
+      const totalAttendance = logs?.length || 0;
+      const presentCount = logs?.filter(a => a.status === 'present').length || 0;
       
       setStats({
         totalStudents: studentsData?.length || 0,
@@ -91,10 +107,10 @@ const AdminDashboard = () => {
         attendanceRate: totalAttendance > 0 ? Math.round((presentCount / totalAttendance) * 100) : 0
       });
 
-      setFilteredLogs(attendanceLogs);
+      setFilteredLogs(logs || []);
 
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('❌ Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -140,8 +156,6 @@ const AdminDashboard = () => {
       const { data, error } = await query;
       if (error) throw error;
 
-      setAttendanceLogs(data || []);
-      setFilteredLogs(data || []);
       return data || [];
 
     } catch (error) {
@@ -177,7 +191,8 @@ const AdminDashboard = () => {
       activeFilters.endDate = filters.endDate;
     }
 
-    await fetchAttendanceLogs(activeFilters);
+    const logs = await fetchAttendanceLogs(activeFilters);
+    setFilteredLogs(logs || []);
   };
 
   // Reset filters
@@ -190,7 +205,8 @@ const AdminDashboard = () => {
       startDate: '',
       endDate: ''
     });
-    await fetchAttendanceLogs({});
+    const logs = await fetchAttendanceLogs({});
+    setFilteredLogs(logs || []);
   };
 
   // Handle adding new course
