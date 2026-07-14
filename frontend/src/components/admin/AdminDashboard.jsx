@@ -19,7 +19,7 @@ const AdminDashboard = () => {
     attendanceRate: 0
   });
   
-  // Debug state - shows on page!
+  // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
   const [debugError, setDebugError] = useState(null);
   
@@ -88,14 +88,10 @@ const AdminDashboard = () => {
 
       if (studentsError) {
         addDebug(`❌ Students fetch error: ${studentsError.message}`, true);
-        addDebug(`❌ Error code: ${studentsError.code}`, true);
-        addDebug(`❌ Error details: ${studentsError.details || 'No details'}`, true);
       } else {
         addDebug(`✅ Students fetched: ${studentsData?.length || 0} students`);
         if (studentsData?.length > 0) {
           addDebug(`📋 First student: ${studentsData[0].full_name} (${studentsData[0].email})`);
-        } else {
-          addDebug('⚠️ No students found in database with role=student');
         }
       }
       setStudents(studentsData || []);
@@ -135,7 +131,6 @@ const AdminDashboard = () => {
 
     } catch (error) {
       addDebug(`❌ Error fetching data: ${error.message}`, true);
-      console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -271,7 +266,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // Handle Enroll Students
+  // ✅ FIXED: Handle Enroll Students
   const handleEnrollStudents = async () => {
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -282,18 +277,38 @@ const AdminDashboard = () => {
     setEnrollMessage('');
 
     try {
+      // For each selected student, add the course to their enrolled_courses
       for (let studentId of selectedStudents) {
-        const { error } = await supabase
+        // First, get the current enrolled_courses array
+        const { data: studentData, error: fetchError } = await supabase
+          .from('users')
+          .select('enrolled_courses')
+          .eq('id', studentId)
+          .single();
+
+        if (fetchError) throw fetchError;
+
+        // Create new array with the course added
+        const currentCourses = studentData?.enrolled_courses || [];
+        if (currentCourses.includes(selectedCourse)) {
+          continue; // Skip if already enrolled
+        }
+        const updatedCourses = [...currentCourses, selectedCourse];
+
+        // Update with the new array
+        const { error: updateError } = await supabase
           .from('users')
           .update({
-            enrolled_courses: supabase.sql`array_append(enrolled_courses, ${selectedCourse})`
+            enrolled_courses: updatedCourses
           })
           .eq('id', studentId);
 
-        if (error) throw error;
+        if (updateError) throw updateError;
       }
 
       setEnrollMessage('✅ Students enrolled successfully!');
+      
+      // Refresh data
       await fetchAllData();
       
       setTimeout(() => {
@@ -368,10 +383,10 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* 🔍 DEBUG PANEL - Shows on page! */}
+        {/* Debug Panel */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
-          <h6 className="mb-2">🔍 Debug Log (visible on page)</h6>
-          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+          <h6 className="mb-2">🔍 Debug Log</h6>
+          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
             {debugMessages.length === 0 ? (
               <div className="text-muted">Waiting for data...</div>
             ) : (
@@ -386,11 +401,6 @@ const AdminDashboard = () => {
               ))
             )}
           </div>
-          {debugError && (
-            <Alert variant="danger" className="mt-2 mb-0">
-              ❌ Error: {debugError}
-            </Alert>
-          )}
           <Button 
             variant="outline-secondary" 
             size="sm" 
@@ -401,7 +411,7 @@ const AdminDashboard = () => {
               fetchAllData();
             }}
           >
-            🔄 Refresh & Clear Logs
+            🔄 Refresh
           </Button>
         </Card>
 
@@ -433,7 +443,7 @@ const AdminDashboard = () => {
           </Col>
         </Row>
 
-        {/* Tabs for different sections */}
+        {/* Tabs */}
         <Tabs defaultActiveKey="attendance" className="mb-4" fill>
           <Tab eventKey="attendance" title="📋 Attendance Logs">
             <Card className="p-3 shadow">
