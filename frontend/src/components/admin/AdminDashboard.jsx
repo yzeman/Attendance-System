@@ -39,6 +39,13 @@ const AdminDashboard = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
 
+  // Enroll Modal states
+  const [showEnrollModal, setShowEnrollModal] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [selectedStudents, setSelectedStudents] = useState([]);
+  const [enrollLoading, setEnrollLoading] = useState(false);
+  const [enrollMessage, setEnrollMessage] = useState('');
+
   // User state
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -54,7 +61,7 @@ const AdminDashboard = () => {
       // Fetch students
       const { data: studentsData, error: studentsError } = await supabase
         .from('users')
-        .select('id, full_name, matric_no, email, phone, created_at')
+        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses')
         .eq('role', 'student')
         .order('full_name');
 
@@ -84,7 +91,6 @@ const AdminDashboard = () => {
         attendanceRate: totalAttendance > 0 ? Math.round((presentCount / totalAttendance) * 100) : 0
       });
 
-      // Set filtered logs to all logs initially
       setFilteredLogs(attendanceLogs);
 
     } catch (error) {
@@ -106,7 +112,6 @@ const AdminDashboard = () => {
         `)
         .order('date', { ascending: false });
 
-      // Apply filters
       if (filterObj.courseId) {
         query = query.eq('course_id', filterObj.courseId);
       }
@@ -207,7 +212,6 @@ const AdminDashboard = () => {
       setModalMessage('✅ Course added successfully!');
       setNewCourse({ courseCode: '', courseName: '', lecturer: '' });
       
-      // Refresh courses
       const { data: coursesData } = await supabase
         .from('courses')
         .select('*')
@@ -224,6 +228,57 @@ const AdminDashboard = () => {
       setModalMessage('❌ ' + error.message);
       setModalLoading(false);
     }
+  };
+
+  // Handle Enroll Students
+  const handleEnrollStudents = async () => {
+    if (!selectedCourse || selectedStudents.length === 0) {
+      setEnrollMessage('Please select a course and at least one student.');
+      return;
+    }
+
+    setEnrollLoading(true);
+    setEnrollMessage('');
+
+    try {
+      // Update each student's enrolled_courses
+      for (let studentId of selectedStudents) {
+        const { error } = await supabase
+          .from('users')
+          .update({
+            enrolled_courses: supabase.sql`array_append(enrolled_courses, ${selectedCourse})`
+          })
+          .eq('id', studentId);
+
+        if (error) throw error;
+      }
+
+      setEnrollMessage('✅ Students enrolled successfully!');
+      
+      // Refresh data
+      await fetchAllData();
+      
+      setTimeout(() => {
+        setShowEnrollModal(false);
+        setEnrollMessage('');
+        setSelectedStudents([]);
+        setSelectedCourse(null);
+        setEnrollLoading(false);
+      }, 1500);
+
+    } catch (error) {
+      setEnrollMessage('❌ ' + error.message);
+      setEnrollLoading(false);
+    }
+  };
+
+  // Toggle student selection for enrollment
+  const toggleStudentSelection = (studentId) => {
+    setSelectedStudents(prev => 
+      prev.includes(studentId) 
+        ? prev.filter(id => id !== studentId)
+        : [...prev, studentId]
+    );
   };
 
   // Export attendance logs to CSV
@@ -458,9 +513,18 @@ const AdminDashboard = () => {
             <Card className="p-3 shadow">
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <h5>Manage Courses</h5>
-                <Button variant="primary" onClick={() => setShowCourseModal(true)}>
-                  ➕ Add New Course
-                </Button>
+                <div>
+                  <Button 
+                    variant="success" 
+                    onClick={() => setShowEnrollModal(true)}
+                    className="me-2"
+                  >
+                    👥 Enroll Students
+                  </Button>
+                  <Button variant="primary" onClick={() => setShowCourseModal(true)}>
+                    ➕ Add New Course
+                  </Button>
+                </div>
               </div>
               <div className="table-container">
                 <Table striped bordered hover responsive>
@@ -480,18 +544,23 @@ const AdminDashboard = () => {
                         </td>
                       </tr>
                     ) : (
-                      courses.map((course) => (
-                        <tr key={course.id}>
-                          <td><strong>{course.course_code}</strong></td>
-                          <td>{course.course_name}</td>
-                          <td>{course.lecturer || 'N/A'}</td>
-                          <td>
-                            <Badge bg="info">
-                              {students.filter(s => s.enrolled_courses?.includes(course.id)).length}
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))
+                      courses.map((course) => {
+                        const enrolledCount = students.filter(s => 
+                          s.enrolled_courses?.includes(course.id)
+                        ).length;
+                        return (
+                          <tr key={course.id}>
+                            <td><strong>{course.course_code}</strong></td>
+                            <td>{course.course_name}</td>
+                            <td>{course.lecturer || 'N/A'}</td>
+                            <td>
+                              <Badge bg="info">
+                                {enrolledCount}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </Table>
@@ -510,13 +579,14 @@ const AdminDashboard = () => {
                       <th>Matric No</th>
                       <th>Email</th>
                       <th>Phone</th>
+                      <th>Enrolled Courses</th>
                       <th>Registered</th>
                     </tr>
                   </thead>
                   <tbody>
                     {students.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="text-center text-muted">
+                        <td colSpan="6" className="text-center text-muted">
                           No students registered.
                         </td>
                       </tr>
@@ -527,6 +597,11 @@ const AdminDashboard = () => {
                           <td>{student.matric_no}</td>
                           <td>{student.email}</td>
                           <td>{student.phone || 'N/A'}</td>
+                          <td>
+                            <Badge bg="info">
+                              {student.enrolled_courses?.length || 0}
+                            </Badge>
+                          </td>
                           <td>{new Date(student.created_at).toLocaleDateString()}</td>
                         </tr>
                       ))
@@ -590,6 +665,80 @@ const AdminDashboard = () => {
             </Button>
             <Button variant="primary" onClick={handleAddCourse} disabled={modalLoading}>
               {modalLoading ? <Spinner size="sm" /> : 'Add Course'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Enroll Students Modal */}
+        <Modal show={showEnrollModal} onHide={() => setShowEnrollModal(false)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>👥 Enroll Students in Course</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {enrollMessage && (
+              <Alert variant={enrollMessage.startsWith('✅') ? 'success' : 'danger'}>
+                {enrollMessage}
+              </Alert>
+            )}
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Select Course</Form.Label>
+                <Form.Select
+                  value={selectedCourse || ''}
+                  onChange={(e) => setSelectedCourse(e.target.value)}
+                  disabled={enrollLoading}
+                >
+                  <option value="">Choose a course...</option>
+                  {courses.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.course_code} - {c.course_name}
+                    </option>
+                  ))}
+                </Form.Select>
+              </Form.Group>
+
+              {selectedCourse && (
+                <>
+                  <Form.Label>Select Students to Enroll</Form.Label>
+                  <div className="border rounded p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                    {students.length === 0 ? (
+                      <p className="text-muted">No students registered.</p>
+                    ) : (
+                      students.map(student => {
+                        const isEnrolled = student.enrolled_courses?.includes(selectedCourse);
+                        const isSelected = selectedStudents.includes(student.id);
+                        return (
+                          <Form.Check
+                            key={student.id}
+                            type="checkbox"
+                            id={`student-${student.id}`}
+                            label={`${student.full_name} (${student.matric_no})`}
+                            checked={isSelected}
+                            onChange={() => toggleStudentSelection(student.id)}
+                            disabled={enrollLoading || isEnrolled}
+                            className="mb-2"
+                          />
+                        );
+                      })
+                    )}
+                  </div>
+                  <small className="text-muted mt-2">
+                    {selectedStudents.length} student(s) selected for enrollment.
+                  </small>
+                </>
+              )}
+            </Form>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowEnrollModal(false)} disabled={enrollLoading}>
+              Cancel
+            </Button>
+            <Button 
+              variant="success" 
+              onClick={handleEnrollStudents} 
+              disabled={enrollLoading || !selectedCourse || selectedStudents.length === 0}
+            >
+              {enrollLoading ? <Spinner size="sm" /> : '✅ Enroll Students'}
             </Button>
           </Modal.Footer>
         </Modal>
