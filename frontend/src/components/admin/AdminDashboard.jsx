@@ -19,6 +19,10 @@ const AdminDashboard = () => {
     attendanceRate: 0
   });
   
+  // Debug state - shows on page!
+  const [debugMessages, setDebugMessages] = useState([]);
+  const [debugError, setDebugError] = useState(null);
+  
   // Filter states
   const [filters, setFilters] = useState({
     courseId: '',
@@ -49,6 +53,17 @@ const AdminDashboard = () => {
   // User state
   const user = JSON.parse(localStorage.getItem('user'));
 
+  // Add debug message function
+  const addDebug = (message, isError = false) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const entry = { timestamp, message, isError };
+    setDebugMessages(prev => [...prev, entry]);
+    if (isError) {
+      setDebugError(message);
+    }
+    console.log(`[${timestamp}] ${message}`);
+  };
+
   // Load all data on mount
   useEffect(() => {
     fetchAllData();
@@ -57,12 +72,14 @@ const AdminDashboard = () => {
   // Fetch all data
   const fetchAllData = async () => {
     setLoading(true);
+    setDebugMessages([]);
+    setDebugError(null);
+    addDebug('🔵 Admin: Fetching all data...');
+    addDebug(`🔵 Admin User: ${user?.email || 'Not logged in'}`);
+    
     try {
-      console.log('🔵 Admin: Fetching all data...');
-      console.log('🔵 Admin User:', user);
-      
       // Fetch students
-      console.log('🔵 Fetching students with role=student...');
+      addDebug('🔵 Fetching students with role=student...');
       const { data: studentsData, error: studentsError } = await supabase
         .from('users')
         .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role')
@@ -70,31 +87,37 @@ const AdminDashboard = () => {
         .order('full_name');
 
       if (studentsError) {
-        console.error('❌ Students fetch error:', studentsError);
-        console.error('❌ Error details:', studentsError.message, studentsError.code);
+        addDebug(`❌ Students fetch error: ${studentsError.message}`, true);
+        addDebug(`❌ Error code: ${studentsError.code}`, true);
+        addDebug(`❌ Error details: ${studentsError.details || 'No details'}`, true);
       } else {
-        console.log('✅ Students fetched:', studentsData?.length || 0, 'students');
-        console.log('📋 Student data:', studentsData);
+        addDebug(`✅ Students fetched: ${studentsData?.length || 0} students`);
+        if (studentsData?.length > 0) {
+          addDebug(`📋 First student: ${studentsData[0].full_name} (${studentsData[0].email})`);
+        } else {
+          addDebug('⚠️ No students found in database with role=student');
+        }
       }
       setStudents(studentsData || []);
 
       // Fetch courses
-      console.log('🔵 Fetching courses...');
+      addDebug('🔵 Fetching courses...');
       const { data: coursesData, error: coursesError } = await supabase
         .from('courses')
         .select('*')
         .order('course_code');
 
       if (coursesError) {
-        console.error('❌ Courses fetch error:', coursesError);
+        addDebug(`❌ Courses fetch error: ${coursesError.message}`, true);
       } else {
-        console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
+        addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
       }
       setCourses(coursesData || []);
 
       // Fetch all attendance logs
+      addDebug('🔵 Fetching attendance logs...');
       const logs = await fetchAttendanceLogs();
-      console.log('✅ Attendance logs fetched:', logs?.length || 0, 'records');
+      addDebug(`✅ Attendance logs fetched: ${logs?.length || 0} records`);
 
       // Update stats
       const totalAttendance = logs?.length || 0;
@@ -108,9 +131,11 @@ const AdminDashboard = () => {
       });
 
       setFilteredLogs(logs || []);
+      addDebug('✅ All data loaded successfully!');
 
     } catch (error) {
-      console.error('❌ Error fetching data:', error);
+      addDebug(`❌ Error fetching data: ${error.message}`, true);
+      console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -159,7 +184,7 @@ const AdminDashboard = () => {
       return data || [];
 
     } catch (error) {
-      console.error('Error fetching attendance logs:', error);
+      addDebug(`❌ Attendance logs error: ${error.message}`, true);
       return [];
     }
   };
@@ -257,7 +282,6 @@ const AdminDashboard = () => {
     setEnrollMessage('');
 
     try {
-      // Update each student's enrolled_courses
       for (let studentId of selectedStudents) {
         const { error } = await supabase
           .from('users')
@@ -270,8 +294,6 @@ const AdminDashboard = () => {
       }
 
       setEnrollMessage('✅ Students enrolled successfully!');
-      
-      // Refresh data
       await fetchAllData();
       
       setTimeout(() => {
@@ -346,6 +368,43 @@ const AdminDashboard = () => {
           </div>
         </div>
 
+        {/* 🔍 DEBUG PANEL - Shows on page! */}
+        <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
+          <h6 className="mb-2">🔍 Debug Log (visible on page)</h6>
+          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+            {debugMessages.length === 0 ? (
+              <div className="text-muted">Waiting for data...</div>
+            ) : (
+              debugMessages.map((msg, idx) => (
+                <div key={idx} style={{ 
+                  color: msg.isError ? '#dc3545' : '#28a745',
+                  borderBottom: '1px solid #e9ecef',
+                  padding: '2px 0'
+                }}>
+                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+                </div>
+              ))
+            )}
+          </div>
+          {debugError && (
+            <Alert variant="danger" className="mt-2 mb-0">
+              ❌ Error: {debugError}
+            </Alert>
+          )}
+          <Button 
+            variant="outline-secondary" 
+            size="sm" 
+            className="mt-2"
+            onClick={() => {
+              setDebugMessages([]);
+              setDebugError(null);
+              fetchAllData();
+            }}
+          >
+            🔄 Refresh & Clear Logs
+          </Button>
+        </Card>
+
         {/* Statistics Cards */}
         <Row className="mb-4">
           <Col md={3}>
@@ -378,7 +437,6 @@ const AdminDashboard = () => {
         <Tabs defaultActiveKey="attendance" className="mb-4" fill>
           <Tab eventKey="attendance" title="📋 Attendance Logs">
             <Card className="p-3 shadow">
-              {/* Filters */}
               <div className="mb-3">
                 <h5>Filter Attendance</h5>
                 <Row className="g-2">
@@ -479,11 +537,8 @@ const AdminDashboard = () => {
                 </Row>
               </div>
 
-              {/* Attendance Table */}
               <div className="table-container">
-                <h6 className="mb-2">
-                  Showing {filteredLogs.length} record(s)
-                </h6>
+                <h6 className="mb-2">Showing {filteredLogs.length} record(s)</h6>
                 <Table striped bordered hover responsive>
                   <thead>
                     <tr>
