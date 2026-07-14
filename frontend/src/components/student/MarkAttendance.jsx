@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { loadModels, getFaceDescriptor, compareDescriptors, areModelsLoaded } from '../../utils/faceUtils';
+import { loadModels, getFaceDescriptor, compareDescriptors } from '../../utils/faceUtils';
 import { Container, Row, Col, Card, Button, Alert, Spinner, ListGroup, Badge } from 'react-bootstrap';
 
 const MarkAttendance = () => {
@@ -11,27 +11,43 @@ const MarkAttendance = () => {
   const [messageType, setMessageType] = useState('');
   const [isMarking, setIsMarking] = useState(false);
   const [modelsReady, setModelsReady] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [todayAttendance, setTodayAttendance] = useState([]);
+  const [debugMessage, setDebugMessage] = useState('⏳ Initializing...');
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
+  // Add debug function
+  const addDebug = (msg) => {
+    console.log(msg);
+    setDebugMessage(msg);
+  };
+
   useEffect(() => {
-    // Load face recognition models
-    const initModels = async () => {
+    const init = async () => {
+      addDebug('🔵 MarkAttendance: Initializing...');
+      
+      // 1. Load face recognition models
+      addDebug('🔄 Loading face models...');
+      setModelsLoading(true);
       const loaded = await loadModels();
       setModelsReady(loaded);
+      setModelsLoading(false);
+      addDebug(loaded ? '✅ Models loaded successfully' : '❌ Models failed to load');
+      
+      // 2. Start webcam
+      await startWebcam();
+      
+      // 3. Fetch courses and today's attendance
+      await fetchCourses();
+      await fetchTodayAttendance();
+      
+      addDebug('✅ Initialization complete');
     };
-    initModels();
+    
+    init();
 
-    // Start webcam
-    startWebcam();
-
-    // Fetch courses and today's attendance
-    fetchCourses();
-    fetchTodayAttendance();
-
-    // Cleanup
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
         videoRef.current.srcObject.getTracks().forEach(track => track.stop());
@@ -41,15 +57,18 @@ const MarkAttendance = () => {
 
   const startWebcam = async () => {
     try {
+      addDebug('📷 Starting webcam...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480 }
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setWebcamStarted(true);
+        addDebug('✅ Webcam started');
       }
     } catch (err) {
       console.error('Webcam error:', err);
+      addDebug('❌ Webcam error: ' + err.message);
       setMessage('⚠️ Unable to access webcam. Please allow camera permissions.');
       setMessageType('warning');
     }
@@ -57,13 +76,23 @@ const MarkAttendance = () => {
 
   const fetchCourses = async () => {
     try {
+      addDebug('🔵 Fetching enrolled courses for: ' + user?.email);
+      
+      // Get the student's enrolled course IDs
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses')
         .eq('id', user.id)
         .single();
 
-      if (userError) throw userError;
+      if (userError) {
+        console.error('❌ User fetch error:', userError);
+        addDebug('❌ User fetch error: ' + userError.message);
+        throw userError;
+      }
+
+      console.log('🔵 Enrolled course IDs:', userData?.enrolled_courses);
+      addDebug('📋 Enrolled course IDs: ' + JSON.stringify(userData?.enrolled_courses));
 
       if (userData?.enrolled_courses?.length) {
         const { data: coursesData, error: courseError } = await supabase
@@ -71,21 +100,38 @@ const MarkAttendance = () => {
           .select('*')
           .in('id', userData.enrolled_courses);
 
-        if (courseError) throw courseError;
+        if (courseError) {
+          console.error('❌ Courses fetch error:', courseError);
+          addDebug('❌ Courses fetch error: ' + courseError.message);
+          throw courseError;
+        }
+        
+        console.log('✅ Courses fetched:', coursesData);
+        addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
         setCourses(coursesData || []);
+        
+        if (coursesData?.length === 0) {
+          setMessage('ℹ️ You are enrolled but no courses found in the system.');
+          setMessageType('info');
+        }
       } else {
+        console.log('⚠️ No enrolled courses found');
+        addDebug('⚠️ No enrolled courses found');
+        setCourses([]);
         setMessage('ℹ️ You are not enrolled in any courses. Please contact your lecturer.');
         setMessageType('info');
       }
     } catch (error) {
-      console.error('Error fetching courses:', error);
-      setMessage('❌ Error loading courses.');
+      console.error('❌ Error fetching courses:', error);
+      addDebug('❌ Error fetching courses: ' + error.message);
+      setMessage('❌ Error loading courses. Please refresh.');
       setMessageType('danger');
     }
   };
 
   const fetchTodayAttendance = async () => {
     try {
+      addDebug('🔵 Fetching today\'s attendance...');
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -95,10 +141,18 @@ const MarkAttendance = () => {
         .eq('student_id', user.id)
         .gte('date', today.toISOString());
 
-      if (error) throw error;
-      setTodayAttendance((data || []).map(a => a.course_id));
+      if (error) {
+        console.error('❌ Attendance fetch error:', error);
+        addDebug('❌ Attendance fetch error: ' + error.message);
+        throw error;
+      }
+      
+      const marked = (data || []).map(a => a.course_id);
+      setTodayAttendance(marked);
+      addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
     } catch (error) {
       console.error('Error fetching today attendance:', error);
+      addDebug('❌ Error fetching today\'s attendance: ' + error.message);
     }
   };
 
@@ -118,41 +172,52 @@ const MarkAttendance = () => {
     setIsMarking(true);
     setMessage('');
     setMessageType('');
+    addDebug('📸 Starting attendance marking for course: ' + courseId);
 
     try {
       // 1. Get live face descriptor
+      addDebug('📸 Capturing face...');
       const liveDescriptor = await getFaceDescriptor(videoRef.current);
       if (!liveDescriptor) {
         setMessage('❌ No face detected. Please look straight at the camera and try again.');
         setMessageType('danger');
+        addDebug('❌ No face detected');
         setIsMarking(false);
         return;
       }
+      addDebug('✅ Face captured');
 
       // 2. Fetch stored face descriptors for this student
+      addDebug('🔵 Fetching stored face descriptors...');
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('face_descriptors')
         .eq('id', user.id)
         .single();
 
-      if (userError) throw userError;
+      if (userError) {
+        addDebug('❌ User fetch error: ' + userError.message);
+        throw userError;
+      }
 
       const storedDescriptors = userData.face_descriptors || [];
+      addDebug(`📋 Found ${storedDescriptors.length} stored face samples`);
+      
       if (storedDescriptors.length === 0) {
         setMessage('❌ No face samples found. Please re-register with face enrolment.');
         setMessageType('danger');
+        addDebug('❌ No face samples found');
         setIsMarking(false);
         return;
       }
 
       // 3. Compare live face with stored descriptors
+      addDebug('🔍 Comparing faces...');
       let matched = false;
-      let matchIndex = -1;
       for (let i = 0; i < storedDescriptors.length; i++) {
         if (compareDescriptors(liveDescriptor, storedDescriptors[i], 0.6)) {
           matched = true;
-          matchIndex = i;
+          addDebug(`✅ Face matched with sample ${i + 1}`);
           break;
         }
       }
@@ -160,6 +225,7 @@ const MarkAttendance = () => {
       if (!matched) {
         setMessage('❌ Face does not match your registered profile. Please try again or contact admin.');
         setMessageType('danger');
+        addDebug('❌ Face did not match any stored sample');
         setIsMarking(false);
         return;
       }
@@ -168,11 +234,13 @@ const MarkAttendance = () => {
       if (todayAttendance.includes(courseId)) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
+        addDebug('⚠️ Already marked today');
         setIsMarking(false);
         return;
       }
 
       // 5. Insert attendance record
+      addDebug('💾 Saving attendance record...');
       const { error: insertError } = await supabase
         .from('attendance')
         .insert({
@@ -181,20 +249,28 @@ const MarkAttendance = () => {
           status: 'present'
         });
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        addDebug('❌ Insert error: ' + insertError.message);
+        throw insertError;
+      }
 
       // 6. Update today's attendance list
       setTodayAttendance(prev => [...prev, courseId]);
+      addDebug('✅ Attendance saved successfully');
 
       setMessage('✅ Attendance marked successfully! ✓');
       setMessageType('success');
 
-      // 7. Find course name for success message
+      // Find course name for success message
       const course = courses.find(c => c.id === courseId);
+      if (course) {
+        addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
+      }
       setSelectedCourse(null);
 
     } catch (error) {
       console.error('Error marking attendance:', error);
+      addDebug('❌ Error marking attendance: ' + error.message);
       setMessage('❌ Error marking attendance. Please try again.');
       setMessageType('danger');
     }
@@ -210,6 +286,11 @@ const MarkAttendance = () => {
     <Container className="mt-4">
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
+
+        {/* Debug Status */}
+        <Alert variant="info" className="mb-3">
+          <strong>🔍 Status:</strong> {debugMessage}
+        </Alert>
 
         <Row>
           {/* Camera Section */}
@@ -228,7 +309,7 @@ const MarkAttendance = () => {
               </div>
               <div className="mt-2 d-flex justify-content-between">
                 <small className="text-muted">
-                  {modelsReady ? '✅ Models loaded' : '⏳ Loading models...'}
+                  {modelsReady ? '✅ Models loaded' : modelsLoading ? '⏳ Loading models...' : '❌ Models failed'}
                 </small>
                 <small className="text-muted">
                   {webcamStarted ? '✅ Webcam active' : '⏳ Starting webcam...'}
@@ -290,7 +371,7 @@ const MarkAttendance = () => {
                   <Button
                     variant="success"
                     onClick={() => handleMarkAttendance(selectedCourse.id)}
-                    disabled={isMarking || isCourseMarked(selectedCourse.id)}
+                    disabled={isMarking || isCourseMarked(selectedCourse.id) || !modelsReady || modelsLoading}
                     className="w-100"
                     size="lg"
                   >
