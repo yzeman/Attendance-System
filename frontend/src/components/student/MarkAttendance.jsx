@@ -14,14 +14,14 @@ const MarkAttendance = () => {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [todayAttendance, setTodayAttendance] = useState([]);
-  const [debugMessage, setDebugMessage] = useState('⏳ Initializing...');
+  const [debugMessages, setDebugMessages] = useState([]);
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
-  // Add debug function
-  const addDebug = (msg) => {
-    console.log(msg);
-    setDebugMessage(msg);
+  const addDebug = (message, isError = false) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugMessages(prev => [...prev, { timestamp, message, isError }]);
+    console.log(`[${timestamp}] ${message}`);
   };
 
   useEffect(() => {
@@ -78,7 +78,6 @@ const MarkAttendance = () => {
     try {
       addDebug('🔵 Fetching enrolled courses for: ' + user?.email);
       
-      // Get the student's enrolled course IDs
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses')
@@ -86,44 +85,38 @@ const MarkAttendance = () => {
         .single();
 
       if (userError) {
-        console.error('❌ User fetch error:', userError);
-        addDebug('❌ User fetch error: ' + userError.message);
+        addDebug('❌ User fetch error: ' + userError.message, true);
         throw userError;
       }
 
-      console.log('🔵 Enrolled course IDs:', userData?.enrolled_courses);
-      addDebug('📋 Enrolled course IDs: ' + JSON.stringify(userData?.enrolled_courses));
+      const enrolledIds = userData?.enrolled_courses || [];
+      addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
+      addDebug(`📋 IDs: ${JSON.stringify(enrolledIds)}`);
 
-      if (userData?.enrolled_courses?.length) {
+      if (enrolledIds.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
           .from('courses')
           .select('*')
-          .in('id', userData.enrolled_courses);
+          .in('id', enrolledIds);
 
         if (courseError) {
-          console.error('❌ Courses fetch error:', courseError);
-          addDebug('❌ Courses fetch error: ' + courseError.message);
+          addDebug('❌ Courses fetch error: ' + courseError.message, true);
           throw courseError;
         }
         
-        console.log('✅ Courses fetched:', coursesData);
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
-        setCourses(coursesData || []);
-        
-        if (coursesData?.length === 0) {
-          setMessage('ℹ️ You are enrolled but no courses found in the system.');
-          setMessageType('info');
+        if (coursesData?.length > 0) {
+          addDebug(`📋 Courses: ${coursesData.map(c => c.course_code).join(', ')}`);
         }
+        setCourses(coursesData || []);
       } else {
-        console.log('⚠️ No enrolled courses found');
         addDebug('⚠️ No enrolled courses found');
         setCourses([]);
         setMessage('ℹ️ You are not enrolled in any courses. Please contact your lecturer.');
         setMessageType('info');
       }
     } catch (error) {
-      console.error('❌ Error fetching courses:', error);
-      addDebug('❌ Error fetching courses: ' + error.message);
+      addDebug('❌ Error fetching courses: ' + error.message, true);
       setMessage('❌ Error loading courses. Please refresh.');
       setMessageType('danger');
     }
@@ -142,8 +135,7 @@ const MarkAttendance = () => {
         .gte('date', today.toISOString());
 
       if (error) {
-        console.error('❌ Attendance fetch error:', error);
-        addDebug('❌ Attendance fetch error: ' + error.message);
+        addDebug('❌ Attendance fetch error: ' + error.message, true);
         throw error;
       }
       
@@ -151,8 +143,7 @@ const MarkAttendance = () => {
       setTodayAttendance(marked);
       addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
     } catch (error) {
-      console.error('Error fetching today attendance:', error);
-      addDebug('❌ Error fetching today\'s attendance: ' + error.message);
+      addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
   };
 
@@ -196,7 +187,7 @@ const MarkAttendance = () => {
         .single();
 
       if (userError) {
-        addDebug('❌ User fetch error: ' + userError.message);
+        addDebug('❌ User fetch error: ' + userError.message, true);
         throw userError;
       }
 
@@ -250,7 +241,7 @@ const MarkAttendance = () => {
         });
 
       if (insertError) {
-        addDebug('❌ Insert error: ' + insertError.message);
+        addDebug('❌ Insert error: ' + insertError.message, true);
         throw insertError;
       }
 
@@ -261,7 +252,6 @@ const MarkAttendance = () => {
       setMessage('✅ Attendance marked successfully! ✓');
       setMessageType('success');
 
-      // Find course name for success message
       const course = courses.find(c => c.id === courseId);
       if (course) {
         addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
@@ -269,8 +259,7 @@ const MarkAttendance = () => {
       setSelectedCourse(null);
 
     } catch (error) {
-      console.error('Error marking attendance:', error);
-      addDebug('❌ Error marking attendance: ' + error.message);
+      addDebug('❌ Error marking attendance: ' + error.message, true);
       setMessage('❌ Error marking attendance. Please try again.');
       setMessageType('danger');
     }
@@ -287,10 +276,25 @@ const MarkAttendance = () => {
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
 
-        {/* Debug Status */}
-        <Alert variant="info" className="mb-3">
-          <strong>🔍 Status:</strong> {debugMessage}
-        </Alert>
+        {/* Debug Panel */}
+        <Card className="mb-3 p-3" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
+          <h6 className="mb-2">🔍 Debug Log</h6>
+          <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+            {debugMessages.length === 0 ? (
+              <div className="text-muted">Initializing...</div>
+            ) : (
+              debugMessages.map((msg, idx) => (
+                <div key={idx} style={{ 
+                  color: msg.isError ? '#dc3545' : '#28a745',
+                  borderBottom: '1px solid #e9ecef',
+                  padding: '2px 0'
+                }}>
+                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
 
         <Row>
           {/* Camera Section */}
@@ -321,7 +325,7 @@ const MarkAttendance = () => {
           {/* Course Selection Section */}
           <Col md={6}>
             <Card className="p-3 shadow-lg">
-              <h5 className="mb-3">📚 Select Course</h5>
+              <h5 className="mb-3">📚 Select Course ({courses.length} available)</h5>
 
               {message && (
                 <Alert 
