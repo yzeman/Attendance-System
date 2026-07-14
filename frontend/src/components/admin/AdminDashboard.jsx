@@ -107,6 +107,7 @@ const AdminDashboard = () => {
         addDebug(`❌ Courses fetch error: ${coursesError.message}`, true);
       } else {
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
+        addDebug(`📋 Course list: ${coursesData?.map(c => c.course_code).join(', ')}`);
       }
       setCourses(coursesData || []);
 
@@ -246,6 +247,7 @@ const AdminDashboard = () => {
       if (error) throw error;
 
       setModalMessage('✅ Course added successfully!');
+      addDebug(`✅ Course added: ${newCourse.courseCode}`);
       setNewCourse({ courseCode: '', courseName: '', lecturer: '' });
       
       const { data: coursesData } = await supabase
@@ -266,7 +268,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ FIXED: Handle Enroll Students
+  // ✅ FIXED: Handle Enroll Students with Debugging
   const handleEnrollStudents = async () => {
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -275,27 +277,45 @@ const AdminDashboard = () => {
 
     setEnrollLoading(true);
     setEnrollMessage('');
+    addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
+    
+    // Find course name
+    const course = courses.find(c => c.id === selectedCourse);
+    addDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
     try {
-      // For each selected student, add the course to their enrolled_courses
+      let successCount = 0;
+      
       for (let studentId of selectedStudents) {
-        // First, get the current enrolled_courses array
+        addDebug(`🔵 Processing student: ${studentId}`);
+        
+        // Step 1: Get current enrolled courses
         const { data: studentData, error: fetchError } = await supabase
           .from('users')
-          .select('enrolled_courses')
+          .select('id, full_name, email, enrolled_courses')
           .eq('id', studentId)
           .single();
 
-        if (fetchError) throw fetchError;
-
-        // Create new array with the course added
-        const currentCourses = studentData?.enrolled_courses || [];
-        if (currentCourses.includes(selectedCourse)) {
-          continue; // Skip if already enrolled
+        if (fetchError) {
+          addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
+          throw fetchError;
         }
-        const updatedCourses = [...currentCourses, selectedCourse];
 
-        // Update with the new array
+        const currentCourses = studentData?.enrolled_courses || [];
+        addDebug(`📋 Current courses for ${studentData.full_name}: ${currentCourses.length} courses`);
+        addDebug(`📋 Course IDs: ${JSON.stringify(currentCourses)}`);
+
+        // Step 2: Check if already enrolled
+        if (currentCourses.includes(selectedCourse)) {
+          addDebug(`⚠️ ${studentData.full_name} already enrolled in this course`);
+          continue;
+        }
+
+        // Step 3: Add new course
+        const updatedCourses = [...currentCourses, selectedCourse];
+        addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
+
+        // Step 4: Update database
         const { error: updateError } = await supabase
           .from('users')
           .update({
@@ -303,10 +323,17 @@ const AdminDashboard = () => {
           })
           .eq('id', studentId);
 
-        if (updateError) throw updateError;
+        if (updateError) {
+          addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
+          throw updateError;
+        }
+
+        successCount++;
+        addDebug(`✅ Enrolled ${studentData.full_name} successfully`);
       }
 
-      setEnrollMessage('✅ Students enrolled successfully!');
+      addDebug(`✅ All done! ${successCount} student(s) enrolled successfully`);
+      setEnrollMessage(`✅ ${successCount} student(s) enrolled successfully!`);
       
       // Refresh data
       await fetchAllData();
@@ -320,6 +347,7 @@ const AdminDashboard = () => {
       }, 1500);
 
     } catch (error) {
+      addDebug(`❌ Enrollment error: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
       setEnrollLoading(false);
     }
@@ -401,6 +429,11 @@ const AdminDashboard = () => {
               ))
             )}
           </div>
+          {debugError && (
+            <Alert variant="danger" className="mt-2 mb-0">
+              ❌ Error: {debugError}
+            </Alert>
+          )}
           <Button 
             variant="outline-secondary" 
             size="sm" 
