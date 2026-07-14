@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { Container, Row, Col, Card, Table, Badge, Spinner } from 'react-bootstrap';
+import { Container, Row, Col, Card, Table, Badge, Spinner, Alert } from 'react-bootstrap';
 
 const StudentDashboard = () => {
   const [attendance, setAttendance] = useState([]);
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [debugMessages, setDebugMessages] = useState([]);
   const [stats, setStats] = useState({
     totalPresent: 0,
     totalCourses: 0,
@@ -13,16 +14,25 @@ const StudentDashboard = () => {
   });
   const user = JSON.parse(localStorage.getItem('user'));
 
+  const addDebug = (message, isError = false) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugMessages(prev => [...prev, { timestamp, message, isError }]);
+    console.log(`[${timestamp}] ${message}`);
+  };
+
   useEffect(() => {
     fetchData();
   }, []);
 
   const fetchData = async () => {
     setLoading(true);
+    setDebugMessages([]);
+    addDebug(`🔵 Student Dashboard: Fetching data for ${user?.email}`);
+    addDebug(`🔵 User ID: ${user?.id}`);
+    
     try {
-      console.log('🔵 Student: Fetching data for:', user?.email);
-      
       // 1. Fetch student's attendance records
+      addDebug('🔵 Fetching attendance records...');
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
         .select('*, course:course_id(course_code, course_name)')
@@ -30,13 +40,14 @@ const StudentDashboard = () => {
         .order('date', { ascending: false });
 
       if (attError) {
-        console.error('❌ Attendance fetch error:', attError);
+        addDebug(`❌ Attendance fetch error: ${attError.message}`, true);
       } else {
-        console.log('✅ Attendance fetched:', attendanceData?.length || 0, 'records');
+        addDebug(`✅ Attendance fetched: ${attendanceData?.length || 0} records`);
       }
       setAttendance(attendanceData || []);
 
       // 2. Fetch student's enrolled courses
+      addDebug('🔵 Fetching enrolled courses...');
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses')
@@ -44,27 +55,33 @@ const StudentDashboard = () => {
         .single();
 
       if (userError) {
-        console.error('❌ User fetch error:', userError);
+        addDebug(`❌ User fetch error: ${userError.message}`, true);
       } else {
-        console.log('✅ User data fetched:', userData);
+        addDebug(`✅ User data fetched successfully`);
       }
 
-      if (userData?.enrolled_courses?.length) {
-        console.log('🔵 Enrolled course IDs:', userData.enrolled_courses);
-        
+      const enrolledIds = userData?.enrolled_courses || [];
+      addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
+      addDebug(`📋 IDs: ${JSON.stringify(enrolledIds)}`);
+
+      if (enrolledIds.length > 0) {
+        addDebug('🔵 Fetching course details...');
         const { data: coursesData, error: courseError } = await supabase
           .from('courses')
           .select('*')
-          .in('id', userData.enrolled_courses);
+          .in('id', enrolledIds);
 
         if (courseError) {
-          console.error('❌ Courses fetch error:', courseError);
+          addDebug(`❌ Courses fetch error: ${courseError.message}`, true);
         } else {
-          console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
+          addDebug(`✅ Courses fetched: ${coursesData?.length || 0} course(s)`);
+          if (coursesData?.length > 0) {
+            addDebug(`📋 Courses: ${coursesData.map(c => c.course_code).join(', ')}`);
+          }
         }
         setCourses(coursesData || []);
       } else {
-        console.log('⚠️ No enrolled courses found');
+        addDebug('⚠️ No enrolled courses found');
         setCourses([]);
       }
 
@@ -75,12 +92,15 @@ const StudentDashboard = () => {
 
       setStats({
         totalPresent: presentCount,
-        totalCourses: userData?.enrolled_courses?.length || 0,
+        totalCourses: enrolledIds.length || 0,
         attendancePercentage: percentage
       });
 
+      addDebug(`📊 Stats: ${presentCount} present, ${enrolledIds.length} courses, ${percentage}%`);
+
     } catch (error) {
-      console.error('❌ Error fetching data:', error);
+      addDebug(`❌ Error fetching data: ${error.message}`, true);
+      console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -122,6 +142,37 @@ const StudentDashboard = () => {
       <div className="animate-fade-in">
         <h2 className="mb-4">👋 Welcome, {user?.full_name}</h2>
 
+        {/* Debug Panel */}
+        <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
+          <h6 className="mb-2">🔍 Debug Log</h6>
+          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+            {debugMessages.length === 0 ? (
+              <div className="text-muted">Loading...</div>
+            ) : (
+              debugMessages.map((msg, idx) => (
+                <div key={idx} style={{ 
+                  color: msg.isError ? '#dc3545' : '#28a745',
+                  borderBottom: '1px solid #e9ecef',
+                  padding: '2px 0'
+                }}>
+                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+                </div>
+              ))
+            )}
+          </div>
+          <Button 
+            variant="outline-secondary" 
+            size="sm" 
+            className="mt-2"
+            onClick={() => {
+              setDebugMessages([]);
+              fetchData();
+            }}
+          >
+            🔄 Refresh Data
+          </Button>
+        </Card>
+
         {/* Statistics Cards */}
         <Row className="mb-4">
           <Col md={4}>
@@ -144,11 +195,11 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* My Courses Section - NEW */}
+        {/* My Courses Section */}
         <Row className="mb-4">
           <Col md={12}>
             <Card className="p-3">
-              <h5 className="mb-3">📚 My Enrolled Courses</h5>
+              <h5 className="mb-3">📚 My Enrolled Courses ({courses.length} course{courses.length !== 1 ? 's' : ''})</h5>
               {courses.length === 0 ? (
                 <Alert variant="info">
                   You are not enrolled in any courses yet. Please contact your lecturer or admin.
