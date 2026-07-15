@@ -47,7 +47,11 @@ const AdminDashboard = () => {
   const [newCourse, setNewCourse] = useState({
     courseCode: '',
     courseName: '',
-    lecturer: ''
+    lecturer: '',
+    department: '',
+    level: '',
+    semester: '',
+    is_active: true
   });
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
@@ -58,7 +62,11 @@ const AdminDashboard = () => {
   const [editCourseData, setEditCourseData] = useState({
     courseCode: '',
     courseName: '',
-    lecturer: ''
+    lecturer: '',
+    department: '',
+    level: '',
+    semester: '',
+    is_active: true
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editMessage, setEditMessage] = useState('');
@@ -123,6 +131,24 @@ const AdminDashboard = () => {
       document.body.removeChild(textarea);
       alert('✅ Debug log copied to clipboard!');
     });
+  };
+
+  // Re-enroll students after course changes
+  const reEnrollStudents = async () => {
+    try {
+      const { error } = await supabase
+        .rpc('enroll_existing_students');
+      
+      if (error) {
+        console.error('Error re-enrolling students:', error);
+        addDebug(`⚠️ Re-enrollment error: ${error.message}`, true);
+      } else {
+        addDebug('✅ Students re-enrolled successfully');
+        await fetchAllData();
+      }
+    } catch (error) {
+      console.error('Error re-enrolling students:', error);
+    }
   };
 
   // Load all data on mount
@@ -432,10 +458,27 @@ const AdminDashboard = () => {
     setFilteredLogs(logs || []);
   };
 
-  // Handle adding new course
+  // Handle adding new course with department, level, semester
   const handleAddCourse = async () => {
     setModalLoading(true);
     setModalMessage('');
+
+    // Validate required fields
+    if (!newCourse.department) {
+      setModalMessage('❌ Please select a department.');
+      setModalLoading(false);
+      return;
+    }
+    if (!newCourse.level) {
+      setModalMessage('❌ Please select a level.');
+      setModalLoading(false);
+      return;
+    }
+    if (!newCourse.semester) {
+      setModalMessage('❌ Please select a semester.');
+      setModalLoading(false);
+      return;
+    }
 
     try {
       const { error } = await supabase
@@ -443,19 +486,34 @@ const AdminDashboard = () => {
         .insert({
           course_code: newCourse.courseCode.toUpperCase(),
           course_name: newCourse.courseName,
-          lecturer: newCourse.lecturer
+          lecturer: newCourse.lecturer,
+          department: newCourse.department,
+          level: newCourse.level,
+          semester: newCourse.semester,
+          is_active: newCourse.is_active !== undefined ? newCourse.is_active : true
         });
 
       if (error) throw error;
 
       setModalMessage('✅ Course added successfully!');
-      setNewCourse({ courseCode: '', courseName: '', lecturer: '' });
+      setNewCourse({ 
+        courseCode: '', 
+        courseName: '', 
+        lecturer: '',
+        department: '',
+        level: '',
+        semester: '',
+        is_active: true
+      });
       
       const { data: coursesData } = await supabase
         .from('courses')
         .select('*')
         .order('course_code');
       setCourses(coursesData || []);
+
+      // Re-enroll existing students based on department/level
+      await reEnrollStudents();
 
       setTimeout(() => {
         setShowCourseModal(false);
@@ -469,7 +527,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // Edit Course Function
+  // Edit Course Function with department, level, semester
   const handleEditCourse = async () => {
     if (!editingCourse) return;
     
@@ -482,7 +540,11 @@ const AdminDashboard = () => {
         .update({
           course_code: editCourseData.courseCode.toUpperCase(),
           course_name: editCourseData.courseName,
-          lecturer: editCourseData.lecturer
+          lecturer: editCourseData.lecturer,
+          department: editCourseData.department,
+          level: editCourseData.level,
+          semester: editCourseData.semester,
+          is_active: editCourseData.is_active !== undefined ? editCourseData.is_active : true
         })
         .eq('id', editingCourse.id);
 
@@ -496,6 +558,9 @@ const AdminDashboard = () => {
         .select('*')
         .order('course_code');
       setCourses(coursesData || []);
+
+      // Re-enroll existing students based on department/level
+      await reEnrollStudents();
 
       setTimeout(() => {
         setShowEditModal(false);
@@ -705,7 +770,11 @@ const AdminDashboard = () => {
     setEditCourseData({
       courseCode: course.course_code,
       courseName: course.course_name,
-      lecturer: course.lecturer || ''
+      lecturer: course.lecturer || '',
+      department: course.department || '',
+      level: course.level || '',
+      semester: course.semester || '',
+      is_active: course.is_active !== undefined ? course.is_active : true
     });
     setEditMessage('');
     setShowEditModal(true);
@@ -1129,14 +1198,18 @@ const AdminDashboard = () => {
                       <th>Course Code</th>
                       <th>Course Name</th>
                       <th>Lecturer</th>
-                      <th>Enrolled Students</th>
+                      <th>Department</th>
+                      <th>Level</th>
+                      <th>Semester</th>
+                      <th>Status</th>
+                      <th>Enrolled</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {courses.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="text-center text-muted">
+                        <td colSpan="9" className="text-center text-muted">
                           No courses found.
                         </td>
                       </tr>
@@ -1150,6 +1223,14 @@ const AdminDashboard = () => {
                             <td><strong>{course.course_code}</strong></td>
                             <td>{course.course_name}</td>
                             <td>{course.lecturer || 'N/A'}</td>
+                            <td>{course.department || 'N/A'}</td>
+                            <td>{course.level || 'N/A'}</td>
+                            <td>{course.semester || 'N/A'}</td>
+                            <td>
+                              <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
+                                {course.is_active !== false ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </td>
                             <td>
                               <Badge bg="info">
                                 {enrolledCount}
@@ -1281,7 +1362,7 @@ const AdminDashboard = () => {
           </Tab>
         </Tabs>
 
-        {/* Add Course Modal */}
+        {/* Add Course Modal with Department, Level, Semester */}
         <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>Add New Course</Modal.Title>
@@ -1294,7 +1375,7 @@ const AdminDashboard = () => {
             )}
             <Form>
               <Form.Group className="mb-3">
-                <Form.Label>Course Code</Form.Label>
+                <Form.Label>Course Code <span className="text-danger">*</span></Form.Label>
                 <Form.Control
                   type="text"
                   placeholder="e.g., SWD101"
@@ -1305,7 +1386,7 @@ const AdminDashboard = () => {
                 />
               </Form.Group>
               <Form.Group className="mb-3">
-                <Form.Label>Course Name</Form.Label>
+                <Form.Label>Course Name <span className="text-danger">*</span></Form.Label>
                 <Form.Control
                   type="text"
                   placeholder="e.g., Introduction to Web Development"
@@ -1325,6 +1406,71 @@ const AdminDashboard = () => {
                   disabled={modalLoading}
                 />
               </Form.Group>
+
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Department <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      value={newCourse.department || ''}
+                      onChange={(e) => setNewCourse({ ...newCourse, department: e.target.value })}
+                      disabled={modalLoading}
+                      required
+                    >
+                      <option value="">Select Department</option>
+                      {departments.map((dept) => (
+                        <option key={dept.id} value={dept.name}>{dept.name}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Level <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      value={newCourse.level || ''}
+                      onChange={(e) => setNewCourse({ ...newCourse, level: e.target.value })}
+                      disabled={modalLoading}
+                      required
+                    >
+                      <option value="">Select Level</option>
+                      <option value="ND1">ND1</option>
+                      <option value="ND2">ND2</option>
+                      <option value="HND1">HND1</option>
+                      <option value="HND2">HND2</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Semester <span className="text-danger">*</span></Form.Label>
+                <Form.Select
+                  value={newCourse.semester || ''}
+                  onChange={(e) => setNewCourse({ ...newCourse, semester: e.target.value })}
+                  disabled={modalLoading}
+                  required
+                >
+                  <option value="">Select Semester</option>
+                  <option value="First">First Semester</option>
+                  <option value="Second">Second Semester</option>
+                </Form.Select>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  value={newCourse.is_active !== undefined ? newCourse.is_active : true}
+                  onChange={(e) => setNewCourse({ ...newCourse, is_active: e.target.value === 'true' })}
+                  disabled={modalLoading}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </Form.Select>
+                <Form.Text className="text-muted">
+                  Inactive courses won't be auto-enrolled to new students
+                </Form.Text>
+              </Form.Group>
             </Form>
           </Modal.Body>
           <Modal.Footer>
@@ -1337,7 +1483,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Edit Course Modal */}
+        {/* Edit Course Modal with Department, Level, Semester */}
         <Modal show={showEditModal} onHide={() => setShowEditModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>✏️ Edit Course</Modal.Title>
@@ -1350,7 +1496,7 @@ const AdminDashboard = () => {
             )}
             <Form>
               <Form.Group className="mb-3">
-                <Form.Label>Course Code</Form.Label>
+                <Form.Label>Course Code <span className="text-danger">*</span></Form.Label>
                 <Form.Control
                   type="text"
                   placeholder="e.g., SWD101"
@@ -1361,7 +1507,7 @@ const AdminDashboard = () => {
                 />
               </Form.Group>
               <Form.Group className="mb-3">
-                <Form.Label>Course Name</Form.Label>
+                <Form.Label>Course Name <span className="text-danger">*</span></Form.Label>
                 <Form.Control
                   type="text"
                   placeholder="e.g., Introduction to Web Development"
@@ -1380,6 +1526,71 @@ const AdminDashboard = () => {
                   onChange={(e) => setEditCourseData({ ...editCourseData, lecturer: e.target.value })}
                   disabled={editLoading}
                 />
+              </Form.Group>
+
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Department <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      value={editCourseData.department || ''}
+                      onChange={(e) => setEditCourseData({ ...editCourseData, department: e.target.value })}
+                      disabled={editLoading}
+                      required
+                    >
+                      <option value="">Select Department</option>
+                      {departments.map((dept) => (
+                        <option key={dept.id} value={dept.name}>{dept.name}</option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Level <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      value={editCourseData.level || ''}
+                      onChange={(e) => setEditCourseData({ ...editCourseData, level: e.target.value })}
+                      disabled={editLoading}
+                      required
+                    >
+                      <option value="">Select Level</option>
+                      <option value="ND1">ND1</option>
+                      <option value="ND2">ND2</option>
+                      <option value="HND1">HND1</option>
+                      <option value="HND2">HND2</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Semester <span className="text-danger">*</span></Form.Label>
+                <Form.Select
+                  value={editCourseData.semester || ''}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, semester: e.target.value })}
+                  disabled={editLoading}
+                  required
+                >
+                  <option value="">Select Semester</option>
+                  <option value="First">First Semester</option>
+                  <option value="Second">Second Semester</option>
+                </Form.Select>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Status</Form.Label>
+                <Form.Select
+                  value={editCourseData.is_active !== undefined ? editCourseData.is_active : true}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, is_active: e.target.value === 'true' })}
+                  disabled={editLoading}
+                >
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </Form.Select>
+                <Form.Text className="text-muted">
+                  Inactive courses won't be auto-enrolled to new students
+                </Form.Text>
               </Form.Group>
             </Form>
           </Modal.Body>
