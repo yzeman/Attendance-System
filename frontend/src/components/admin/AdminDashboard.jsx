@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../utils/supabaseClient';
 import { 
   Container, Row, Col, Card, Table, Button, Form, 
@@ -58,6 +58,7 @@ const AdminDashboard = () => {
   const [enrollLoading, setEnrollLoading] = useState(false);
   const [enrollMessage, setEnrollMessage] = useState('');
   const [enrollDebug, setEnrollDebug] = useState([]); // Debug inside modal
+  const [enrollComplete, setEnrollComplete] = useState(false); // Track if enrollment is done
   
   // Search states for modals
   const [courseSearchEnroll, setCourseSearchEnroll] = useState('');
@@ -81,6 +82,26 @@ const AdminDashboard = () => {
   // Clear modal debug
   const clearEnrollDebug = () => {
     setEnrollDebug([]);
+  };
+
+  // Copy debug log to clipboard
+  const copyDebugLog = () => {
+    const logText = enrollDebug.map(msg => 
+      `[${msg.timestamp}] ${msg.message}`
+    ).join('\n');
+    
+    navigator.clipboard.writeText(logText).then(() => {
+      alert('✅ Debug log copied to clipboard!');
+    }).catch(() => {
+      // Fallback for older browsers
+      const textarea = document.createElement('textarea');
+      textarea.value = logText;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      alert('✅ Debug log copied to clipboard!');
+    });
   };
 
   // Load all data on mount
@@ -358,10 +379,11 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ ENHANCED: Handle Enroll Students with Debug INSIDE Modal
+  // ✅ Handle Enroll Students with Debug INSIDE Modal - KEEPS MODAL OPEN
   const handleEnrollStudents = async () => {
     // Clear previous debug
     setEnrollDebug([]);
+    setEnrollComplete(false);
     
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -378,7 +400,7 @@ const AdminDashboard = () => {
       console.log(`[${timestamp}] ${message}`);
     };
 
-    modalDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
+    modalDebug(`🔵 Enrolling ${selectedStudents.length} student(s)`);
     
     // Find course name
     const course = courses.find(c => c.id === selectedCourse);
@@ -404,19 +426,18 @@ const AdminDashboard = () => {
 
           if (fetchError) {
             modalDebug(`❌ Fetch error: ${fetchError.message}`, true);
-            modalDebug(`❌ Error code: ${fetchError.code}`, true);
-            modalDebug(`❌ Details: ${fetchError.details || 'No details'}`, true);
+            modalDebug(`❌ Code: ${fetchError.code}`, true);
             failCount++;
             continue;
           }
 
           const studentName = studentData?.full_name || 'Unknown';
           const currentCourses = studentData?.enrolled_courses || [];
-          modalDebug(`📋 ${studentName} - Current courses: ${currentCourses.length}`);
+          modalDebug(`📋 ${studentName} - Current: ${currentCourses.length} courses`);
 
           // Step 2: Check if already enrolled
           if (currentCourses.includes(selectedCourse)) {
-            modalDebug(`⚠️ ${studentName} already enrolled in this course`);
+            modalDebug(`⚠️ ${studentName} already enrolled`);
             alreadyEnrolledCount++;
             continue;
           }
@@ -436,9 +457,8 @@ const AdminDashboard = () => {
 
           if (updateError) {
             modalDebug(`❌ Update error: ${updateError.message}`, true);
-            modalDebug(`❌ Error code: ${updateError.code}`, true);
+            modalDebug(`❌ Code: ${updateError.code}`, true);
             modalDebug(`❌ Details: ${updateError.details || 'No details'}`, true);
-            modalDebug(`❌ Hint: ${updateError.hint || 'No hint'}`, true);
             failCount++;
             continue;
           }
@@ -461,7 +481,8 @@ const AdminDashboard = () => {
               successCount++;
             } else {
               modalDebug(`❌ NOT ENROLLED: ${studentName}`, true);
-              modalDebug(`❌ Expected: ${selectedCourse}, Got: ${JSON.stringify(verifiedCourses)}`, true);
+              modalDebug(`❌ Expected: ${selectedCourse}`, true);
+              modalDebug(`❌ Got: ${JSON.stringify(verifiedCourses)}`, true);
               failCount++;
             }
           }
@@ -485,23 +506,18 @@ const AdminDashboard = () => {
       
       setEnrollMessage(summary);
       modalDebug(`📊 ${summary}`);
+      setEnrollComplete(true);
       
       await fetchAllData();
-      
-      setTimeout(() => {
-        setShowEnrollModal(false);
-        setEnrollMessage('');
-        setSelectedStudents([]);
-        setSelectedCourse(null);
-        setEnrollLoading(false);
-        setEnrollDebug([]);
-      }, 3000);
 
     } catch (error) {
       modalDebug(`❌ ERROR: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
-      setEnrollLoading(false);
+      setEnrollComplete(true);
     }
+    
+    setEnrollLoading(false);
+    // MODAL STAYS OPEN - user must click Cancel to close
   };
 
   // Toggle student selection for enrollment
@@ -1060,8 +1076,12 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Enroll Students Modal WITH DEBUG INSIDE */}
-        <Modal show={showEnrollModal} onHide={() => setShowEnrollModal(false)} size="lg">
+        {/* Enroll Students Modal WITH DEBUG INSIDE + COPY BUTTON + STAYS OPEN */}
+        <Modal show={showEnrollModal} onHide={() => {
+          setShowEnrollModal(false);
+          setEnrollDebug([]);
+          setEnrollComplete(false);
+        }} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>👥 Enroll Students in Course</Modal.Title>
           </Modal.Header>
@@ -1072,15 +1092,22 @@ const AdminDashboard = () => {
               </Alert>
             )}
 
-            {/* 🔍 DEBUG INSIDE MODAL */}
+            {/* 🔍 DEBUG INSIDE MODAL WITH COPY BUTTON */}
             <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #007bff' }}>
               <div className="d-flex justify-content-between align-items-center">
                 <h6 className="mb-0">🔍 Debug Log ({enrollDebug.length} messages)</h6>
-                <Button variant="outline-danger" size="sm" onClick={clearEnrollDebug}>
-                  🗑️ Clear
-                </Button>
+                <div>
+                  {enrollDebug.length > 0 && (
+                    <Button variant="outline-primary" size="sm" className="me-1" onClick={copyDebugLog}>
+                      📋 Copy Log
+                    </Button>
+                  )}
+                  <Button variant="outline-danger" size="sm" onClick={clearEnrollDebug}>
+                    🗑️ Clear
+                  </Button>
+                </div>
               </div>
-              <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
+              <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
                 {enrollDebug.length === 0 ? (
                   <div className="text-muted">Waiting for enrollment...</div>
                 ) : (
@@ -1162,8 +1189,12 @@ const AdminDashboard = () => {
             </Form>
           </Modal.Body>
           <Modal.Footer>
-            <Button variant="secondary" onClick={() => setShowEnrollModal(false)} disabled={enrollLoading}>
-              Cancel
+            <Button variant="secondary" onClick={() => {
+              setShowEnrollModal(false);
+              setEnrollDebug([]);
+              setEnrollComplete(false);
+            }} disabled={enrollLoading}>
+              Close
             </Button>
             <Button 
               variant="success" 
