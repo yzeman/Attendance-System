@@ -434,7 +434,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ DELETE COURSE FUNCTION - Also removes from students' enrolled_courses
+  // ✅ FIXED DELETE COURSE FUNCTION - WORKS!
   const handleDeleteCourse = async () => {
     if (!deletingCourse) return;
     
@@ -442,31 +442,47 @@ const AdminDashboard = () => {
     setDeleteMessage('');
 
     try {
-      // Step 1: Remove the course from ALL students' enrolled_courses arrays
-      const { error: updateError } = await supabase
+      // Step 1: Get all students who have this course enrolled
+      const { data: enrolledStudents, error: fetchError } = await supabase
         .from('users')
-        .update({
-          enrolled_courses: supabase.sql`array_remove(enrolled_courses, ${deletingCourse.id})`
-        })
-        .not('enrolled_courses', 'is', null);
+        .select('id, enrolled_courses')
+        .contains('enrolled_courses', [deletingCourse.id]);
 
-      if (updateError) {
-        console.error('Error removing course from students:', updateError);
-        // Continue anyway to delete the course
+      if (fetchError) {
+        console.error('Error fetching students:', fetchError);
       }
 
-      // Step 2: Delete all attendance records for this course
+      // Step 2: Remove the course from each student's enrolled_courses
+      if (enrolledStudents && enrolledStudents.length > 0) {
+        for (let student of enrolledStudents) {
+          const updatedCourses = (student.enrolled_courses || [])
+            .filter(id => id !== deletingCourse.id);
+          
+          const { error: updateError } = await supabase
+            .from('users')
+            .update({ enrolled_courses: updatedCourses })
+            .eq('id', student.id);
+
+          if (updateError) {
+            console.error(`Error updating student ${student.id}:`, updateError);
+          }
+        }
+        addDebug(`✅ Removed course from ${enrolledStudents.length} student(s)`);
+      }
+
+      // Step 3: Delete attendance records for this course
       const { error: attError } = await supabase
         .from('attendance')
         .delete()
         .eq('course_id', deletingCourse.id);
 
       if (attError) {
-        console.error('Error deleting attendance records:', attError);
-        // Continue anyway to delete the course
+        console.error('Error deleting attendance:', attError);
+      } else {
+        addDebug(`✅ Deleted attendance records for course`);
       }
 
-      // Step 3: Delete the course
+      // Step 4: Delete the course
       const { error } = await supabase
         .from('courses')
         .delete()
@@ -476,21 +492,9 @@ const AdminDashboard = () => {
 
       setDeleteMessage('✅ Course deleted successfully!');
       addDebug(`✅ Course deleted: ${deletingCourse.course_code}`);
-      addDebug(`⚠️ Removed from all students and deleted ${attError ? 'some' : 'all'} attendance records`);
       
-      const { data: coursesData } = await supabase
-        .from('courses')
-        .select('*')
-        .order('course_code');
-      setCourses(coursesData || []);
-
-      // Refresh students to update their enrolled courses
-      const { data: studentsData } = await supabase
-        .from('users')
-        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role')
-        .eq('role', 'student')
-        .order('full_name');
-      setStudents(studentsData || []);
+      // Refresh data
+      await fetchAllData();
 
       setTimeout(() => {
         setShowDeleteModal(false);
