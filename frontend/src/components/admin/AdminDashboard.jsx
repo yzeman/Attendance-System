@@ -4,6 +4,10 @@ import {
   Container, Row, Col, Card, Table, Button, Form, 
   Badge, Alert, Spinner, Modal, Tab, Tabs 
 } from 'react-bootstrap';
+import { Bar, Doughnut } from 'react-chartjs-2';
+import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js';
+
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 const AdminDashboard = () => {
   // State variables
@@ -35,6 +39,10 @@ const AdminDashboard = () => {
   const [showCourseAttendanceModal, setShowCourseAttendanceModal] = useState(false);
   const [courseAttendanceData, setCourseAttendanceData] = useState([]);
   const [selectedCourseForAttendance, setSelectedCourseForAttendance] = useState(null);
+  
+  // Today's attendance modal
+  const [showTodayAttendanceModal, setShowTodayAttendanceModal] = useState(false);
+  const [todayAttendanceData, setTodayAttendanceData] = useState([]);
   
   // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
@@ -476,7 +484,6 @@ const AdminDashboard = () => {
       groupedLogs[key].dates.push(new Date(log.date).toLocaleDateString());
     });
     
-    setFilteredLogs(logs || []);
     setFilteredLogs(Object.values(groupedLogs));
   };
 
@@ -862,6 +869,33 @@ const AdminDashboard = () => {
     setLoading(false);
   };
 
+  // Open today's attendance modal
+  const openTodayAttendanceModal = async () => {
+    setLoading(true);
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const { data, error } = await supabase
+        .from('attendance')
+        .select(`
+          *,
+          student:student_id(id, full_name, matric_no),
+          course:course_id(id, course_code, course_name)
+        `)
+        .gte('date', today.toISOString())
+        .order('date', { ascending: false });
+
+      if (error) throw error;
+      setTodayAttendanceData(data || []);
+      setShowTodayAttendanceModal(true);
+    } catch (error) {
+      console.error('Error fetching today\'s attendance:', error);
+      alert('Error loading today\'s attendance data');
+    }
+    setLoading(false);
+  };
+
   // Export course attendance to CSV
   const exportCourseAttendance = () => {
     if (courseAttendanceData.length === 0) {
@@ -887,6 +921,37 @@ const AdminDashboard = () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${selectedCourseForAttendance?.course_code}_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Export today's attendance to CSV
+  const exportTodayAttendance = () => {
+    if (todayAttendanceData.length === 0) {
+      alert('No data to export.');
+      return;
+    }
+
+    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Date', 'Status'];
+    const rows = todayAttendanceData.map(record => [
+      record.student?.full_name || 'N/A',
+      record.student?.matric_no || 'N/A',
+      record.course?.course_code || 'N/A',
+      record.course?.course_name || 'N/A',
+      new Date(record.date).toLocaleString(),
+      record.status || 'present'
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `today_attendance_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -978,7 +1043,7 @@ const AdminDashboard = () => {
         </div>
 
         {/* Semester Toggle */}
-        <Card className="mb-4 p-3">
+        <Card className="mb-4 p-3 shadow-sm" style={{ borderRadius: '12px', background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)' }}>
           <Row className="align-items-center">
             <Col md={6}>
               <h6 className="mb-0">📅 Semester View</h6>
@@ -995,7 +1060,7 @@ const AdminDashboard = () => {
                 <Form.Select
                   value={selectedSemester}
                   onChange={(e) => setSelectedSemester(e.target.value)}
-                  style={{ width: 'auto' }}
+                  style={{ width: 'auto', borderRadius: '8px' }}
                 >
                   <option value="First">First Semester</option>
                   <option value="Second">Second Semester</option>
@@ -1005,64 +1070,46 @@ const AdminDashboard = () => {
           </Row>
         </Card>
 
-        {/* Debug Panel */}
-        <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
-          <h6 className="mb-2">🔍 Debug Log ({debugMessages.length} messages)</h6>
-          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
-            {debugMessages.length === 0 ? (
-              <div className="text-muted">Waiting for data...</div>
-            ) : (
-              debugMessages.slice(-15).map((msg, idx) => (
-                <div key={idx} style={{ 
-                  color: msg.isError ? '#dc3545' : '#28a745',
-                  borderBottom: '1px solid #e9ecef',
-                  padding: '2px 0'
-                }}>
-                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
-                </div>
-              ))
-            )}
-          </div>
-          <div className="mt-2 d-flex gap-2">
-            <Button variant="outline-secondary" size="sm" onClick={() => { setDebugMessages([]); setDebugError(null); fetchAllData(); }}>
-              🔄 Refresh All Data
-            </Button>
-            <Button variant="outline-danger" size="sm" onClick={() => { setDebugMessages([]); setDebugError(null); }}>
-              🗑️ Clear Logs
-            </Button>
-          </div>
-        </Card>
-
-        {/* Statistics Cards */}
-        <Row className="mb-4">
-          <Col md={2}>
-            <Card className="stat-card">
-              <h2>{stats.totalStudents}</h2>
-              <p>👨‍🎓 Total Students</p>
+        {/* Stats Cards - Improved UI */}
+        <Row className="mb-4 g-3">
+          <Col md={2} sm={4} xs={6}>
+            <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+              <h2 className="text-white fw-bold">{stats.totalStudents}</h2>
+              <p className="text-white-50 mb-0">👨‍🎓 Students</p>
             </Card>
           </Col>
-          <Col md={2}>
-            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
-              <h2>{stats.totalCourses}</h2>
-              <p>📚 Total Courses</p>
+          <Col md={2} sm={4} xs={6}>
+            <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
+              <h2 className="text-white fw-bold">{stats.totalCourses}</h2>
+              <p className="text-white-50 mb-0">📚 Courses</p>
             </Card>
           </Col>
-          <Col md={2}>
-            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
-              <h2>{stats.totalAttendance}</h2>
-              <p>📋 Total Records</p>
+          <Col md={2} sm={4} xs={6}>
+            <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
+              <h2 className="text-white fw-bold">{stats.totalAttendance}</h2>
+              <p className="text-white-50 mb-0">📋 Records</p>
             </Card>
           </Col>
-          <Col md={2}>
-            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
-              <h2>{stats.attendanceRate}%</h2>
-              <p>📈 Overall Rate</p>
+          <Col md={2} sm={4} xs={6}>
+            <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
+              <h2 className="text-white fw-bold">{stats.attendanceRate}%</h2>
+              <p className="text-white-50 mb-0">📈 Attendance</p>
             </Card>
           </Col>
-          <Col md={2}>
-            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
-              <h2>{stats.todayAttendance}</h2>
-              <p>📅 Today Present</p>
+          <Col md={2} sm={4} xs={6}>
+            <Card 
+              className="text-center p-3 shadow-sm" 
+              style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)', cursor: 'pointer' }}
+              onClick={openTodayAttendanceModal}
+            >
+              <h2 className="text-white fw-bold">{stats.todayAttendance}</h2>
+              <p className="text-white-50 mb-0">📅 Today</p>
+            </Card>
+          </Col>
+          <Col md={2} sm={4} xs={6}>
+            <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)' }}>
+              <h2 className="text-dark fw-bold">📥</h2>
+              <p className="text-muted mb-0">Export</p>
             </Card>
           </Col>
         </Row>
@@ -1070,7 +1117,7 @@ const AdminDashboard = () => {
         {/* Course Attendance Stats */}
         <Row className="mb-4">
           <Col md={12}>
-            <Card className="p-3">
+            <Card className="p-3 shadow-sm" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">📊 Course Attendance Details</h5>
               <Row>
                 <Col md={6}>
@@ -1086,7 +1133,7 @@ const AdminDashboard = () => {
                     <Form.Select
                       value={selectedCourseId}
                       onChange={handleCourseSelect}
-                      style={{ height: 'auto' }}
+                      style={{ height: 'auto', borderRadius: '8px' }}
                     >
                       <option value="">-- Select a Course --</option>
                       {filteredCourses.map(c => (
@@ -1104,6 +1151,7 @@ const AdminDashboard = () => {
                       value={selectedStudentId}
                       onChange={handleStudentSelect}
                       disabled={!selectedCourseId}
+                      style={{ borderRadius: '8px' }}
                     >
                       <option value="">All Students</option>
                       {students.map(s => (
@@ -1118,15 +1166,15 @@ const AdminDashboard = () => {
 
               {selectedCourseStats ? (
                 <div className="mt-3">
-                  <Row>
+                  <Row className="g-2">
                     <Col md={4}>
-                      <Card className="p-2 text-center" style={{ background: '#e3f2fd' }}>
+                      <Card className="p-2 text-center" style={{ background: '#e3f2fd', borderRadius: '10px' }}>
                         <h6>📚 {selectedCourseStats.courseCode}</h6>
                         <div>{selectedCourseStats.courseName}</div>
                       </Card>
                     </Col>
                     <Col md={2}>
-                      <Card className="p-2 text-center" style={{ background: '#e8f5e9' }}>
+                      <Card className="p-2 text-center" style={{ background: '#e8f5e9', borderRadius: '10px' }}>
                         <h6>📋 Total</h6>
                         <div><strong>{selectedCourseStats.present}</strong> / {selectedCourseStats.total}</div>
                         <Badge bg={selectedCourseStats.percentage >= 75 ? 'success' : 'warning'}>
@@ -1135,7 +1183,7 @@ const AdminDashboard = () => {
                       </Card>
                     </Col>
                     <Col md={2}>
-                      <Card className="p-2 text-center" style={{ background: '#fff3e0' }}>
+                      <Card className="p-2 text-center" style={{ background: '#fff3e0', borderRadius: '10px' }}>
                         <h6>📅 Today</h6>
                         <div><strong>{selectedCourseStats.todayPresent}</strong> / {selectedCourseStats.todayTotal}</div>
                         <Badge bg={selectedCourseStats.todayPercentage >= 75 ? 'success' : 'warning'}>
@@ -1144,12 +1192,22 @@ const AdminDashboard = () => {
                       </Card>
                     </Col>
                     <Col md={4}>
-                      <Card className="p-2 text-center" style={{ background: '#f3e5f5' }}>
+                      <Card className="p-2 text-center" style={{ background: '#f3e5f5', borderRadius: '10px' }}>
                         <h6>👨‍🎓 Students</h6>
                         <div>
                           {selectedCourseStats.students.length > 0 ? (
-                            selectedCourseStats.students.slice(0, 3).join(', ') + 
-                            (selectedCourseStats.students.length > 3 ? ` +${selectedCourseStats.students.length - 3} more` : '')
+                            <>
+                              <Button 
+                                variant="link" 
+                                className="p-0 text-decoration-none"
+                                onClick={() => {
+                                  const course = courses.find(c => c.id === selectedCourseId);
+                                  if (course) openCourseAttendanceModal(course);
+                                }}
+                              >
+                                View All ({selectedCourseStats.students.length})
+                              </Button>
+                            </>
                           ) : 'No students'}
                         </div>
                       </Card>
@@ -1168,7 +1226,7 @@ const AdminDashboard = () => {
         {/* Tabs */}
         <Tabs defaultActiveKey="attendance" className="mb-4" fill>
           <Tab eventKey="attendance" title="📋 Attendance Logs">
-            <Card className="p-3 shadow">
+            <Card className="p-3 shadow-sm" style={{ borderRadius: '15px' }}>
               <div className="mb-3">
                 <h5>Filter Attendance</h5>
                 <Row className="g-2">
@@ -1367,7 +1425,7 @@ const AdminDashboard = () => {
           </Tab>
 
           <Tab eventKey="courses" title="📚 Courses">
-            <Card className="p-3 shadow">
+            <Card className="p-3 shadow-sm" style={{ borderRadius: '15px' }}>
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <h5>Manage Courses</h5>
                 <div>
@@ -1391,6 +1449,7 @@ const AdminDashboard = () => {
                   placeholder="🔍 Search courses by code or name..."
                   value={courseSearch}
                   onChange={(e) => setCourseSearch(e.target.value)}
+                  style={{ borderRadius: '8px' }}
                 />
               </Form.Group>
 
@@ -1577,7 +1636,7 @@ const AdminDashboard = () => {
           </Tab>
 
           <Tab eventKey="students" title="👨‍🎓 Students">
-            <Card className="p-3 shadow">
+            <Card className="p-3 shadow-sm" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">All Students</h5>
               <div className="table-container">
                 <Table striped bordered hover responsive>
@@ -1628,7 +1687,7 @@ const AdminDashboard = () => {
 
           {/* Departments Tab */}
           <Tab eventKey="departments" title="🏛️ Departments">
-            <Card className="p-3 shadow">
+            <Card className="p-3 shadow-sm" style={{ borderRadius: '15px' }}>
               <div className="d-flex justify-content-between align-items-center mb-3">
                 <h5>Manage Departments</h5>
                 <Button variant="primary" onClick={() => setShowDepartmentModal(true)}>
@@ -1733,7 +1792,65 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Add Course Modal with Department, Level, Semester */}
+        {/* Today's Attendance Modal */}
+        <Modal show={showTodayAttendanceModal} onHide={() => setShowTodayAttendanceModal(false)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>📅 Today's Attendance ({new Date().toLocaleDateString()})</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="d-flex justify-content-between mb-3">
+              <div>
+                <strong>Total Today:</strong> {todayAttendanceData.length} records
+              </div>
+              <Button variant="success" size="sm" onClick={exportTodayAttendance}>
+                📥 Export CSV
+              </Button>
+            </div>
+            <div className="table-container">
+              <Table striped bordered hover responsive>
+                <thead>
+                  <tr>
+                    <th>Student</th>
+                    <th>Matric No</th>
+                    <th>Course</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {todayAttendanceData.length === 0 ? (
+                    <tr>
+                      <td colSpan="5" className="text-center text-muted">
+                        No attendance records for today.
+                      </td>
+                    </tr>
+                  ) : (
+                    todayAttendanceData.map((record) => (
+                      <tr key={record.id}>
+                        <td>{record.student?.full_name || 'N/A'}</td>
+                        <td>{record.student?.matric_no || 'N/A'}</td>
+                        <td>{record.course?.course_code || 'N/A'}</td>
+                        <td>{new Date(record.date).toLocaleString()}</td>
+                        <td>
+                          <Badge bg={record.status === 'present' ? 'success' : 'danger'}>
+                            {record.status === 'present' ? '✅ Present' : '❌ Absent'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </Table>
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowTodayAttendanceModal(false)}>
+              Close
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Add Course Modal */}
         <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>Add New Course</Modal.Title>
@@ -1840,9 +1957,6 @@ const AdminDashboard = () => {
                       <option value="true">Active</option>
                       <option value="false">Inactive</option>
                     </Form.Select>
-                    <Form.Text className="text-muted">
-                      Inactive courses won't be auto-enrolled
-                    </Form.Text>
                   </Form.Group>
                 </Col>
                 <Col md={6}>
