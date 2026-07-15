@@ -16,8 +16,12 @@ const AdminDashboard = () => {
     totalStudents: 0,
     totalCourses: 0,
     totalAttendance: 0,
-    attendanceRate: 0
+    attendanceRate: 0,
+    todayAttendance: 0
   });
+  
+  // Course statistics
+  const [courseStats, setCourseStats] = useState([]);
   
   // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
@@ -30,7 +34,8 @@ const AdminDashboard = () => {
     month: '',
     week: '',
     startDate: '',
-    endDate: ''
+    endDate: '',
+    searchQuery: ''  // New search filter
   });
 
   // Modal states for adding course
@@ -49,6 +54,10 @@ const AdminDashboard = () => {
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [enrollLoading, setEnrollLoading] = useState(false);
   const [enrollMessage, setEnrollMessage] = useState('');
+  
+  // Search states for modals
+  const [courseSearch, setCourseSearch] = useState('');
+  const [studentSearch, setStudentSearch] = useState('');
 
   // User state
   const user = JSON.parse(localStorage.getItem('user'));
@@ -90,9 +99,6 @@ const AdminDashboard = () => {
         addDebug(`❌ Students fetch error: ${studentsError.message}`, true);
       } else {
         addDebug(`✅ Students fetched: ${studentsData?.length || 0} students`);
-        if (studentsData?.length > 0) {
-          addDebug(`📋 First student: ${studentsData[0].full_name} (${studentsData[0].email})`);
-        }
       }
       setStudents(studentsData || []);
 
@@ -107,30 +113,50 @@ const AdminDashboard = () => {
         addDebug(`❌ Courses fetch error: ${coursesError.message}`, true);
       } else {
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
-        addDebug(`📋 Course list: ${coursesData?.map(c => c.course_code).join(', ')}`);
       }
       setCourses(coursesData || []);
 
-      // Fetch all attendance logs - STORE the result
+      // Fetch all attendance logs
       addDebug('🔵 Fetching attendance logs...');
       const logs = await fetchAttendanceLogs();
       addDebug(`✅ Attendance logs fetched: ${logs?.length || 0} records`);
       
-      // ✅ FIXED: Use the fetched logs directly for stats
+      // Calculate stats
       const totalAttendance = logs?.length || 0;
       const presentCount = logs?.filter(a => a.status === 'present').length || 0;
       
-      // Update stats with the correct values
+      // Calculate today's attendance
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayLogs = logs?.filter(a => new Date(a.date) >= today) || [];
+      const todayPresent = todayLogs.filter(a => a.status === 'present').length || 0;
+      
+      // Calculate course-wise statistics
+      const courseStatsMap = {};
+      coursesData?.forEach(course => {
+        const courseLogs = logs?.filter(a => a.course_id === course.id) || [];
+        const coursePresent = courseLogs.filter(a => a.status === 'present').length || 0;
+        courseStatsMap[course.id] = {
+          courseCode: course.course_code,
+          courseName: course.course_name,
+          total: courseLogs.length,
+          present: coursePresent,
+          percentage: courseLogs.length > 0 ? Math.round((coursePresent / courseLogs.length) * 100) : 0
+        };
+      });
+      setCourseStats(Object.values(courseStatsMap));
+
+      // Update stats
       setStats({
         totalStudents: studentsData?.length || 0,
         totalCourses: coursesData?.length || 0,
         totalAttendance: totalAttendance,
-        attendanceRate: totalAttendance > 0 ? Math.round((presentCount / totalAttendance) * 100) : 0
+        attendanceRate: totalAttendance > 0 ? Math.round((presentCount / totalAttendance) * 100) : 0,
+        todayAttendance: todayPresent
       });
 
       setFilteredLogs(logs || []);
-      addDebug(`✅ Stats updated: ${totalAttendance} attendance records`);
-      addDebug('✅ All data loaded successfully!');
+      addDebug(`✅ Stats updated: ${totalAttendance} attendance records, ${todayPresent} today`);
 
     } catch (error) {
       addDebug(`❌ Error fetching data: ${error.message}`, true);
@@ -202,7 +228,7 @@ const AdminDashboard = () => {
     setFilters({ ...filters, [name]: value });
   };
 
-  // Apply filters
+  // Apply filters with search
   const applyFilters = async () => {
     const activeFilters = {};
     if (filters.courseId) activeFilters.courseId = filters.courseId;
@@ -214,7 +240,19 @@ const AdminDashboard = () => {
       activeFilters.endDate = filters.endDate;
     }
 
-    const logs = await fetchAttendanceLogs(activeFilters);
+    let logs = await fetchAttendanceLogs(activeFilters);
+    
+    // Apply search filter (client-side)
+    if (filters.searchQuery.trim()) {
+      const query = filters.searchQuery.toLowerCase().trim();
+      logs = logs.filter(log => 
+        log.student?.full_name?.toLowerCase().includes(query) ||
+        log.student?.matric_no?.toLowerCase().includes(query) ||
+        log.course?.course_code?.toLowerCase().includes(query) ||
+        log.course?.course_name?.toLowerCase().includes(query)
+      );
+    }
+    
     setFilteredLogs(logs || []);
   };
 
@@ -226,7 +264,8 @@ const AdminDashboard = () => {
       month: '',
       week: '',
       startDate: '',
-      endDate: ''
+      endDate: '',
+      searchQuery: ''
     });
     const logs = await fetchAttendanceLogs({});
     setFilteredLogs(logs || []);
@@ -280,37 +319,23 @@ const AdminDashboard = () => {
     setEnrollLoading(true);
     setEnrollMessage('');
     addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
-    
-    const course = courses.find(c => c.id === selectedCourse);
-    addDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
     try {
       let successCount = 0;
       
       for (let studentId of selectedStudents) {
-        addDebug(`🔵 Processing student: ${studentId}`);
-        
         const { data: studentData, error: fetchError } = await supabase
           .from('users')
           .select('id, full_name, email, enrolled_courses')
           .eq('id', studentId)
           .single();
 
-        if (fetchError) {
-          addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
-          throw fetchError;
-        }
+        if (fetchError) throw fetchError;
 
         const currentCourses = studentData?.enrolled_courses || [];
-        addDebug(`📋 Current courses for ${studentData.full_name}: ${currentCourses.length} courses`);
-
-        if (currentCourses.includes(selectedCourse)) {
-          addDebug(`⚠️ ${studentData.full_name} already enrolled in this course`);
-          continue;
-        }
+        if (currentCourses.includes(selectedCourse)) continue;
 
         const updatedCourses = [...currentCourses, selectedCourse];
-        addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
 
         const { error: updateError } = await supabase
           .from('users')
@@ -319,18 +344,11 @@ const AdminDashboard = () => {
           })
           .eq('id', studentId);
 
-        if (updateError) {
-          addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
-          throw updateError;
-        }
-
+        if (updateError) throw updateError;
         successCount++;
-        addDebug(`✅ Enrolled ${studentData.full_name} successfully`);
       }
 
-      addDebug(`✅ All done! ${successCount} student(s) enrolled successfully`);
       setEnrollMessage(`✅ ${successCount} student(s) enrolled successfully!`);
-      
       await fetchAllData();
       
       setTimeout(() => {
@@ -342,7 +360,6 @@ const AdminDashboard = () => {
       }, 1500);
 
     } catch (error) {
-      addDebug(`❌ Enrollment error: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
       setEnrollLoading(false);
     }
@@ -388,6 +405,19 @@ const AdminDashboard = () => {
     window.URL.revokeObjectURL(url);
   };
 
+  // Filter courses for search
+  const filteredCourses = courses.filter(c => 
+    c.course_code.toLowerCase().includes(courseSearch.toLowerCase()) ||
+    c.course_name.toLowerCase().includes(courseSearch.toLowerCase())
+  );
+
+  // Filter students for search
+  const filteredStudents = students.filter(s => 
+    s.full_name.toLowerCase().includes(studentSearch.toLowerCase()) ||
+    s.matric_no.toLowerCase().includes(studentSearch.toLowerCase()) ||
+    s.email.toLowerCase().includes(studentSearch.toLowerCase())
+  );
+
   if (loading) {
     return (
       <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
@@ -409,11 +439,11 @@ const AdminDashboard = () => {
         {/* Debug Panel */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
           <h6 className="mb-2">🔍 Debug Log</h6>
-          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
+          <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
             {debugMessages.length === 0 ? (
               <div className="text-muted">Waiting for data...</div>
             ) : (
-              debugMessages.map((msg, idx) => (
+              debugMessages.slice(-10).map((msg, idx) => (
                 <div key={idx} style={{ 
                   color: msg.isError ? '#dc3545' : '#28a745',
                   borderBottom: '1px solid #e9ecef',
@@ -424,11 +454,6 @@ const AdminDashboard = () => {
               ))
             )}
           </div>
-          {debugError && (
-            <Alert variant="danger" className="mt-2 mb-0">
-              ❌ Error: {debugError}
-            </Alert>
-          )}
           <Button 
             variant="outline-secondary" 
             size="sm" 
@@ -439,37 +464,70 @@ const AdminDashboard = () => {
               fetchAllData();
             }}
           >
-            🔄 Refresh
+            🔄 Refresh All Data
           </Button>
         </Card>
 
-        {/* Statistics Cards */}
+        {/* Statistics Cards - Added Today Attendance */}
         <Row className="mb-4">
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card">
               <h2>{stats.totalStudents}</h2>
               <p>👨‍🎓 Total Students</p>
             </Card>
           </Col>
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
               <h2>{stats.totalCourses}</h2>
               <p>📚 Total Courses</p>
             </Card>
           </Col>
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
               <h2>{stats.totalAttendance}</h2>
-              <p>📋 Total Attendance Records</p>
+              <p>📋 Total Records</p>
             </Card>
           </Col>
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
               <h2>{stats.attendanceRate}%</h2>
-              <p>📈 Overall Attendance Rate</p>
+              <p>📈 Overall Rate</p>
+            </Card>
+          </Col>
+          <Col md={2}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
+              <h2>{stats.todayAttendance}</h2>
+              <p>📅 Today Present</p>
             </Card>
           </Col>
         </Row>
+
+        {/* Course Statistics Cards */}
+        {courseStats.length > 0 && (
+          <Row className="mb-4">
+            <Col md={12}>
+              <Card className="p-3">
+                <h5 className="mb-3">📊 Course Attendance Summary</h5>
+                <div className="d-flex flex-wrap gap-3">
+                  {courseStats.map((course, idx) => (
+                    <Card key={idx} className="p-2" style={{ minWidth: '150px', flex: '1 0 auto' }}>
+                      <div className="text-center">
+                        <strong>{course.courseCode}</strong>
+                        <div>{course.present}/{course.total} present</div>
+                        <Badge 
+                          bg={course.percentage >= 75 ? 'success' : course.percentage >= 50 ? 'warning' : 'danger'}
+                          className="mt-1"
+                        >
+                          {course.percentage}%
+                        </Badge>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              </Card>
+            </Col>
+          </Row>
+        )}
 
         {/* Tabs */}
         <Tabs defaultActiveKey="attendance" className="mb-4" fill>
@@ -478,6 +536,19 @@ const AdminDashboard = () => {
               <div className="mb-3">
                 <h5>Filter Attendance</h5>
                 <Row className="g-2">
+                  {/* Search Bar - NEW */}
+                  <Col md={12} className="mb-2">
+                    <Form.Group>
+                      <Form.Label>🔍 Search</Form.Label>
+                      <Form.Control
+                        type="text"
+                        name="searchQuery"
+                        placeholder="Search by student name, matric number, or course code..."
+                        value={filters.searchQuery}
+                        onChange={handleFilterChange}
+                      />
+                    </Form.Group>
+                  </Col>
                   <Col md={3}>
                     <Form.Group>
                       <Form.Label>Course</Form.Label>
@@ -778,7 +849,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Enroll Students Modal */}
+        {/* Enroll Students Modal with Search */}
         <Modal show={showEnrollModal} onHide={() => setShowEnrollModal(false)} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>👥 Enroll Students in Course</Modal.Title>
@@ -790,15 +861,24 @@ const AdminDashboard = () => {
               </Alert>
             )}
             <Form>
+              {/* Course Search */}
               <Form.Group className="mb-3">
                 <Form.Label>Select Course</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="Search courses..."
+                  value={courseSearch}
+                  onChange={(e) => setCourseSearch(e.target.value)}
+                  className="mb-2"
+                />
                 <Form.Select
                   value={selectedCourse || ''}
                   onChange={(e) => setSelectedCourse(e.target.value)}
                   disabled={enrollLoading}
+                  style={{ height: 'auto' }}
                 >
                   <option value="">Choose a course...</option>
-                  {courses.map(c => (
+                  {filteredCourses.map(c => (
                     <option key={c.id} value={c.id}>
                       {c.course_code} - {c.course_name}
                     </option>
@@ -809,11 +889,19 @@ const AdminDashboard = () => {
               {selectedCourse && (
                 <>
                   <Form.Label>Select Students to Enroll</Form.Label>
+                  {/* Student Search */}
+                  <Form.Control
+                    type="text"
+                    placeholder="Search students by name, matric number, or email..."
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    className="mb-2"
+                  />
                   <div className="border rounded p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                    {students.length === 0 ? (
-                      <p className="text-muted">No students registered.</p>
+                    {filteredStudents.length === 0 ? (
+                      <p className="text-muted">No students found matching your search.</p>
                     ) : (
-                      students.map(student => {
+                      filteredStudents.map(student => {
                         const isEnrolled = student.enrolled_courses?.includes(selectedCourse);
                         const isSelected = selectedStudents.includes(student.id);
                         return (
@@ -821,7 +909,7 @@ const AdminDashboard = () => {
                             key={student.id}
                             type="checkbox"
                             id={`student-${student.id}`}
-                            label={`${student.full_name} (${student.matric_no})`}
+                            label={`${student.full_name} (${student.matric_no}) - ${student.email}`}
                             checked={isSelected}
                             onChange={() => toggleStudentSelection(student.id)}
                             disabled={enrollLoading || isEnrolled}
