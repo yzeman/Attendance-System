@@ -21,11 +21,33 @@ const AdminDashboard = () => {
     todayAttendance: 0
   });
   
+  // Semester toggle
+  const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(false);
+  const [selectedSemester, setSelectedSemester] = useState('First');
+  const [courseSearchTerm, setCourseSearchTerm] = useState('');
+  
   // Course attendance stats
   const [selectedCourseStats, setSelectedCourseStats] = useState(null);
   const [selectedCourseId, setSelectedCourseId] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
+  
+  // Attendance log filters
+  const [attendanceFilters, setAttendanceFilters] = useState({
+    department: '',
+    level: '',
+    semester: '',
+    courseId: '',
+    studentId: '',
+    month: '',
+    startDate: '',
+    endDate: ''
+  });
+  
+  // Course attendance list
+  const [showCourseAttendanceModal, setShowCourseAttendanceModal] = useState(false);
+  const [courseAttendanceData, setCourseAttendanceData] = useState([]);
+  const [selectedCourseForAttendance, setSelectedCourseForAttendance] = useState(null);
   
   // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
@@ -51,7 +73,8 @@ const AdminDashboard = () => {
     department: '',
     level: '',
     semester: '',
-    is_active: true
+    is_active: true,
+    can_mark_attendance: true
   });
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
@@ -66,7 +89,8 @@ const AdminDashboard = () => {
     department: '',
     level: '',
     semester: '',
-    is_active: true
+    is_active: true,
+    can_mark_attendance: true
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editMessage, setEditMessage] = useState('');
@@ -133,6 +157,105 @@ const AdminDashboard = () => {
     });
   };
 
+  // Fetch semester setting
+  const fetchSemesterSetting = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'second_semester_enabled')
+        .single();
+
+      if (error) throw error;
+      setSecondSemesterEnabled(data?.value === 'true');
+    } catch (error) {
+      console.error('Error fetching semester setting:', error);
+    }
+  };
+
+  // Update semester setting
+  const updateSemesterSetting = async (enabled) => {
+    try {
+      const { error } = await supabase
+        .from('system_settings')
+        .update({ value: enabled ? 'true' : 'false', updated_at: new Date().toISOString() })
+        .eq('key', 'second_semester_enabled');
+
+      if (error) throw error;
+      setSecondSemesterEnabled(enabled);
+      addDebug(`✅ Second semester ${enabled ? 'enabled' : 'disabled'}`);
+      await fetchAllData();
+    } catch (error) {
+      console.error('Error updating semester setting:', error);
+      addDebug(`❌ Error updating semester: ${error.message}`, true);
+    }
+  };
+
+  // Toggle course attendance marking
+  const toggleCourseAttendance = async (courseId, currentValue) => {
+    try {
+      const { error } = await supabase
+        .from('courses')
+        .update({ can_mark_attendance: !currentValue })
+        .eq('id', courseId);
+
+      if (error) throw error;
+      addDebug(`✅ Course attendance ${!currentValue ? 'enabled' : 'disabled'}`);
+      await fetchAllData();
+    } catch (error) {
+      console.error('Error toggling course attendance:', error);
+      addDebug(`❌ Error toggling course: ${error.message}`, true);
+    }
+  };
+
+  // Fetch course attendance list
+  const fetchCourseAttendance = async (courseId) => {
+    try {
+      const { data, error } = await supabase
+        .rpc('get_student_attendance_count', {
+          p_course_id: courseId
+        });
+
+      if (error) throw error;
+      setCourseAttendanceData(data || []);
+      
+      const course = courses.find(c => c.id === courseId);
+      setSelectedCourseForAttendance(course);
+      setShowCourseAttendanceModal(true);
+    } catch (error) {
+      console.error('Error fetching course attendance:', error);
+      alert('❌ Error fetching attendance data');
+    }
+  };
+
+  // Export course attendance to CSV
+  const exportCourseAttendanceCSV = () => {
+    if (courseAttendanceData.length === 0) {
+      alert('No data to export.');
+      return;
+    }
+
+    const headers = ['Full Name', 'Matric Number', 'Attendance Count'];
+    const rows = courseAttendanceData.map(item => [
+      item.full_name,
+      item.matric_no,
+      item.attendance_count
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${selectedCourseForAttendance?.course_code}_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
   // Re-enroll students after course changes
   const reEnrollStudents = async () => {
     try {
@@ -153,6 +276,7 @@ const AdminDashboard = () => {
 
   // Load all data on mount
   useEffect(() => {
+    fetchSemesterSetting();
     fetchAllData();
     fetchDepartments();
   }, []);
@@ -243,11 +367,17 @@ const AdminDashboard = () => {
       if (studentsError) throw studentsError;
       setStudents(studentsData || []);
 
-      // Fetch courses
-      const { data: coursesData, error: coursesError } = await supabase
+      // Fetch courses - filter by semester if second semester is disabled
+      let query = supabase
         .from('courses')
         .select('*')
         .order('course_code');
+
+      if (!secondSemesterEnabled) {
+        query = query.eq('semester', 'First');
+      }
+
+      const { data: coursesData, error: coursesError } = await query;
 
       if (coursesError) throw coursesError;
       setCourses(coursesData || []);
@@ -282,31 +412,36 @@ const AdminDashboard = () => {
     }
   };
 
-  // Fetch attendance logs with optional filters
+  // Fetch attendance logs with advanced filters
   const fetchAttendanceLogs = async (filterObj = {}) => {
     try {
       let query = supabase
         .from('attendance')
         .select(`
           *,
-          student:student_id(id, full_name, matric_no),
-          course:course_id(id, course_code, course_name)
+          student:student_id(id, full_name, matric_no, department, level),
+          course:course_id(id, course_code, course_name, department, level, semester)
         `)
         .order('date', { ascending: false });
 
       if (filterObj.courseId) query = query.eq('course_id', filterObj.courseId);
       if (filterObj.studentId) query = query.eq('student_id', filterObj.studentId);
+      
+      // Department filter - filter through student data
+      if (filterObj.department) {
+        // We'll filter client-side for department
+      }
+      if (filterObj.level) {
+        // We'll filter client-side for level
+      }
+      if (filterObj.semester) {
+        // We'll filter client-side for semester
+      }
+      
       if (filterObj.month) {
         const start = new Date(filterObj.month + '-01');
         const end = new Date(filterObj.month + '-01');
         end.setMonth(end.getMonth() + 1);
-        query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
-      }
-      if (filterObj.week) {
-        const [year, weekNum] = filterObj.week.split('-').map(Number);
-        const start = getStartOfWeek(year, weekNum);
-        const end = new Date(start);
-        end.setDate(end.getDate() + 6);
         query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
       }
       if (filterObj.startDate && filterObj.endDate) {
@@ -317,7 +452,21 @@ const AdminDashboard = () => {
 
       const { data, error } = await query;
       if (error) throw error;
-      return data || [];
+      
+      // Apply client-side filters for department, level, semester
+      let filtered = data || [];
+      
+      if (filterObj.department) {
+        filtered = filtered.filter(log => log.student?.department === filterObj.department);
+      }
+      if (filterObj.level) {
+        filtered = filtered.filter(log => log.student?.level === filterObj.level);
+      }
+      if (filterObj.semester) {
+        filtered = filtered.filter(log => log.course?.semester === filterObj.semester);
+      }
+      
+      return filtered;
 
     } catch (error) {
       addDebug(`❌ Attendance logs error: ${error.message}`, true);
@@ -410,6 +559,46 @@ const AdminDashboard = () => {
     }
   };
 
+  // Handle attendance filter changes
+  const handleAttendanceFilterChange = (e) => {
+    const { name, value } = e.target;
+    setAttendanceFilters({ ...attendanceFilters, [name]: value });
+  };
+
+  // Apply attendance filters
+  const applyAttendanceFilters = async () => {
+    const activeFilters = {};
+    if (attendanceFilters.department) activeFilters.department = attendanceFilters.department;
+    if (attendanceFilters.level) activeFilters.level = attendanceFilters.level;
+    if (attendanceFilters.semester) activeFilters.semester = attendanceFilters.semester;
+    if (attendanceFilters.courseId) activeFilters.courseId = attendanceFilters.courseId;
+    if (attendanceFilters.studentId) activeFilters.studentId = attendanceFilters.studentId;
+    if (attendanceFilters.month) activeFilters.month = attendanceFilters.month;
+    if (attendanceFilters.startDate && attendanceFilters.endDate) {
+      activeFilters.startDate = attendanceFilters.startDate;
+      activeFilters.endDate = attendanceFilters.endDate;
+    }
+
+    const logs = await fetchAttendanceLogs(activeFilters);
+    setFilteredLogs(logs || []);
+  };
+
+  // Reset attendance filters
+  const resetAttendanceFilters = async () => {
+    setAttendanceFilters({
+      department: '',
+      level: '',
+      semester: '',
+      courseId: '',
+      studentId: '',
+      month: '',
+      startDate: '',
+      endDate: ''
+    });
+    const logs = await fetchAttendanceLogs({});
+    setFilteredLogs(logs || []);
+  };
+
   // Handle filter changes
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
@@ -458,7 +647,7 @@ const AdminDashboard = () => {
     setFilteredLogs(logs || []);
   };
 
-  // Handle adding new course with department, level, semester
+  // Handle adding new course
   const handleAddCourse = async () => {
     setModalLoading(true);
     setModalMessage('');
@@ -490,7 +679,8 @@ const AdminDashboard = () => {
           department: newCourse.department,
           level: newCourse.level,
           semester: newCourse.semester,
-          is_active: newCourse.is_active !== undefined ? newCourse.is_active : true
+          is_active: newCourse.is_active !== undefined ? newCourse.is_active : true,
+          can_mark_attendance: newCourse.can_mark_attendance !== undefined ? newCourse.can_mark_attendance : true
         });
 
       if (error) throw error;
@@ -503,7 +693,8 @@ const AdminDashboard = () => {
         department: '',
         level: '',
         semester: '',
-        is_active: true
+        is_active: true,
+        can_mark_attendance: true
       });
       
       const { data: coursesData } = await supabase
@@ -512,7 +703,6 @@ const AdminDashboard = () => {
         .order('course_code');
       setCourses(coursesData || []);
 
-      // Re-enroll existing students based on department/level
       await reEnrollStudents();
 
       setTimeout(() => {
@@ -527,7 +717,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // Edit Course Function with department, level, semester
+  // Edit Course Function
   const handleEditCourse = async () => {
     if (!editingCourse) return;
     
@@ -544,7 +734,8 @@ const AdminDashboard = () => {
           department: editCourseData.department,
           level: editCourseData.level,
           semester: editCourseData.semester,
-          is_active: editCourseData.is_active !== undefined ? editCourseData.is_active : true
+          is_active: editCourseData.is_active !== undefined ? editCourseData.is_active : true,
+          can_mark_attendance: editCourseData.can_mark_attendance !== undefined ? editCourseData.can_mark_attendance : true
         })
         .eq('id', editingCourse.id);
 
@@ -559,7 +750,6 @@ const AdminDashboard = () => {
         .order('course_code');
       setCourses(coursesData || []);
 
-      // Re-enroll existing students based on department/level
       await reEnrollStudents();
 
       setTimeout(() => {
@@ -583,7 +773,6 @@ const AdminDashboard = () => {
     setDeleteMessage('');
 
     try {
-      // Step 1: Get all students who have this course enrolled
       const { data: enrolledStudents, error: fetchError } = await supabase
         .from('users')
         .select('id, enrolled_courses')
@@ -593,7 +782,6 @@ const AdminDashboard = () => {
         addDebug(`⚠️ Error finding enrolled students: ${fetchError.message}`, true);
       }
 
-      // Step 2: Remove the course from each student's enrolled_courses
       if (enrolledStudents && enrolledStudents.length > 0) {
         for (let student of enrolledStudents) {
           const updatedCourses = (student.enrolled_courses || [])
@@ -611,7 +799,6 @@ const AdminDashboard = () => {
         addDebug(`✅ Removed course from ${enrolledStudents.length} student(s)`);
       }
 
-      // Step 3: Delete attendance records for this course
       const { error: attError } = await supabase
         .from('attendance')
         .delete()
@@ -624,7 +811,6 @@ const AdminDashboard = () => {
         addDebug(`✅ Deleted attendance records for course`);
       }
 
-      // Step 4: Delete the course from courses table
       const { error: courseError } = await supabase
         .from('courses')
         .delete()
@@ -774,7 +960,8 @@ const AdminDashboard = () => {
       department: course.department || '',
       level: course.level || '',
       semester: course.semester || '',
-      is_active: course.is_active !== undefined ? course.is_active : true
+      is_active: course.is_active !== undefined ? course.is_active : true,
+      can_mark_attendance: course.can_mark_attendance !== undefined ? course.can_mark_attendance : true
     });
     setEditMessage('');
     setShowEditModal(true);
@@ -794,12 +981,13 @@ const AdminDashboard = () => {
       return;
     }
 
-    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Date', 'Status'];
+    const headers = ['Student Name', 'Matric No', 'Department', 'Level', 'Course', 'Date', 'Status'];
     const rows = filteredLogs.map(log => [
       log.student?.full_name || 'N/A',
       log.student?.matric_no || 'N/A',
+      log.student?.department || 'N/A',
+      log.student?.level || 'N/A',
       log.course?.course_code || 'N/A',
-      log.course?.course_name || 'N/A',
       new Date(log.date).toLocaleString(),
       log.status || 'present'
     ]);
@@ -836,6 +1024,25 @@ const AdminDashboard = () => {
     s.matric_no.toLowerCase().includes(studentSearchEnroll.toLowerCase()) ||
     s.email.toLowerCase().includes(studentSearchEnroll.toLowerCase())
   );
+
+  // Split courses by semester
+  const firstSemesterCourses = courses.filter(c => c.semester === 'First' || !c.semester);
+  const secondSemesterCourses = courses.filter(c => c.semester === 'Second');
+
+  // Filter courses by search term
+  const filterCoursesBySearch = (courseList) => {
+    if (!courseSearchTerm) return courseList;
+    return courseList.filter(c => 
+      c.course_code.toLowerCase().includes(courseSearchTerm.toLowerCase()) ||
+      c.course_name.toLowerCase().includes(courseSearchTerm.toLowerCase()) ||
+      c.department?.toLowerCase().includes(courseSearchTerm.toLowerCase())
+    );
+  };
+
+  // Get unique departments for filter
+  const uniqueDepartments = [...new Set(students.map(s => s.department).filter(Boolean))];
+  const uniqueLevels = ['ND1', 'ND2', 'HND1', 'HND2'];
+  const uniqueSemesters = ['First', 'Second'];
 
   if (loading) {
     return (
@@ -881,6 +1088,25 @@ const AdminDashboard = () => {
               🗑️ Clear Logs
             </Button>
           </div>
+        </Card>
+
+        {/* Semester Toggle - Global */}
+        <Card className="mb-4 p-3" style={{ background: '#f0f8ff', border: '2px solid #007bff' }}>
+          <Row className="align-items-center">
+            <Col md={6}>
+              <h5 className="mb-0">📅 Second Semester Access</h5>
+              <small className="text-muted">Toggle to show/hide Second Semester courses everywhere</small>
+            </Col>
+            <Col md={6} className="text-end">
+              <Button 
+                variant={secondSemesterEnabled ? 'success' : 'secondary'}
+                onClick={() => updateSemesterSetting(!secondSemesterEnabled)}
+                className="px-4"
+              >
+                {secondSemesterEnabled ? '✅ Second Semester ON' : '❌ Second Semester OFF'}
+              </Button>
+            </Col>
+          </Row>
         </Card>
 
         {/* Statistics Cards */}
@@ -1002,6 +1228,14 @@ const AdminDashboard = () => {
                             (selectedCourseStats.students.length > 3 ? ` +${selectedCourseStats.students.length - 3} more` : '')
                           ) : 'No students'}
                         </div>
+                        <Button 
+                          variant="outline-primary" 
+                          size="sm" 
+                          className="mt-2"
+                          onClick={() => fetchCourseAttendance(selectedCourseId)}
+                        >
+                          📋 View All Students
+                        </Button>
                       </Card>
                     </Col>
                   </Row>
@@ -1020,18 +1254,51 @@ const AdminDashboard = () => {
           <Tab eventKey="attendance" title="📋 Attendance Logs">
             <Card className="p-3 shadow">
               <div className="mb-3">
-                <h5>Filter Attendance</h5>
+                <h5>Filter Attendance Logs</h5>
                 <Row className="g-2">
-                  <Col md={12} className="mb-2">
+                  <Col md={3}>
                     <Form.Group>
-                      <Form.Label>🔍 Search</Form.Label>
-                      <Form.Control
-                        type="text"
-                        name="searchQuery"
-                        placeholder="Search by student name, matric number, or course code..."
-                        value={filters.searchQuery}
-                        onChange={handleFilterChange}
-                      />
+                      <Form.Label>Department</Form.Label>
+                      <Form.Select
+                        name="department"
+                        value={attendanceFilters.department}
+                        onChange={handleAttendanceFilterChange}
+                      >
+                        <option value="">All Departments</option>
+                        {uniqueDepartments.map(dept => (
+                          <option key={dept} value={dept}>{dept}</option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Level</Form.Label>
+                      <Form.Select
+                        name="level"
+                        value={attendanceFilters.level}
+                        onChange={handleAttendanceFilterChange}
+                      >
+                        <option value="">All Levels</option>
+                        {uniqueLevels.map(level => (
+                          <option key={level} value={level}>{level}</option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Semester</Form.Label>
+                      <Form.Select
+                        name="semester"
+                        value={attendanceFilters.semester}
+                        onChange={handleAttendanceFilterChange}
+                      >
+                        <option value="">All Semesters</option>
+                        {uniqueSemesters.map(sem => (
+                          <option key={sem} value={sem}>{sem} Semester</option>
+                        ))}
+                      </Form.Select>
                     </Form.Group>
                   </Col>
                   <Col md={3}>
@@ -1039,8 +1306,8 @@ const AdminDashboard = () => {
                       <Form.Label>Course</Form.Label>
                       <Form.Select
                         name="courseId"
-                        value={filters.courseId}
-                        onChange={handleFilterChange}
+                        value={attendanceFilters.courseId}
+                        onChange={handleAttendanceFilterChange}
                       >
                         <option value="">All Courses</option>
                         {courses.map(c => (
@@ -1056,8 +1323,8 @@ const AdminDashboard = () => {
                       <Form.Label>Student</Form.Label>
                       <Form.Select
                         name="studentId"
-                        value={filters.studentId}
-                        onChange={handleFilterChange}
+                        value={attendanceFilters.studentId}
+                        onChange={handleAttendanceFilterChange}
                       >
                         <option value="">All Students</option>
                         {students.map(s => (
@@ -1068,65 +1335,51 @@ const AdminDashboard = () => {
                       </Form.Select>
                     </Form.Group>
                   </Col>
-                  <Col md={2}>
+                  <Col md={3}>
                     <Form.Group>
                       <Form.Label>Month</Form.Label>
                       <Form.Control
                         type="month"
                         name="month"
-                        value={filters.month}
-                        onChange={handleFilterChange}
+                        value={attendanceFilters.month}
+                        onChange={handleAttendanceFilterChange}
                       />
                     </Form.Group>
                   </Col>
-                  <Col md={2}>
+                  <Col md={3}>
                     <Form.Group>
-                      <Form.Label>Week (YYYY-WW)</Form.Label>
+                      <Form.Label>Start Date</Form.Label>
                       <Form.Control
-                        type="text"
-                        name="week"
-                        placeholder="2025-12"
-                        value={filters.week}
-                        onChange={handleFilterChange}
+                        type="date"
+                        name="startDate"
+                        value={attendanceFilters.startDate}
+                        onChange={handleAttendanceFilterChange}
+                      />
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>End Date</Form.Label>
+                      <Form.Control
+                        type="date"
+                        name="endDate"
+                        value={attendanceFilters.endDate}
+                        onChange={handleAttendanceFilterChange}
                       />
                     </Form.Group>
                   </Col>
                   <Col md={12} className="mt-2">
-                    <Row>
-                      <Col md={3}>
-                        <Form.Group>
-                          <Form.Label>Start Date</Form.Label>
-                          <Form.Control
-                            type="date"
-                            name="startDate"
-                            value={filters.startDate}
-                            onChange={handleFilterChange}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col md={3}>
-                        <Form.Group>
-                          <Form.Label>End Date</Form.Label>
-                          <Form.Control
-                            type="date"
-                            name="endDate"
-                            value={filters.endDate}
-                            onChange={handleFilterChange}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col md={6} className="d-flex align-items-end gap-2">
-                        <Button variant="primary" onClick={applyFilters}>
-                          Apply Filters
-                        </Button>
-                        <Button variant="secondary" onClick={resetFilters}>
-                          Reset
-                        </Button>
-                        <Button variant="success" onClick={exportCSV}>
-                          📥 Export CSV
-                        </Button>
-                      </Col>
-                    </Row>
+                    <div className="d-flex gap-2">
+                      <Button variant="primary" onClick={applyAttendanceFilters}>
+                        Apply Filters
+                      </Button>
+                      <Button variant="secondary" onClick={resetAttendanceFilters}>
+                        Reset
+                      </Button>
+                      <Button variant="success" onClick={exportCSV}>
+                        📥 Export CSV
+                      </Button>
+                    </div>
                   </Col>
                 </Row>
               </div>
@@ -1138,6 +1391,8 @@ const AdminDashboard = () => {
                     <tr>
                       <th>Student</th>
                       <th>Matric No</th>
+                      <th>Department</th>
+                      <th>Level</th>
                       <th>Course</th>
                       <th>Date</th>
                       <th>Status</th>
@@ -1146,7 +1401,7 @@ const AdminDashboard = () => {
                   <tbody>
                     {filteredLogs.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="text-center text-muted">
+                        <td colSpan="7" className="text-center text-muted">
                           No attendance records found.
                         </td>
                       </tr>
@@ -1155,6 +1410,8 @@ const AdminDashboard = () => {
                         <tr key={log.id}>
                           <td>{log.student?.full_name || 'N/A'}</td>
                           <td>{log.student?.matric_no || 'N/A'}</td>
+                          <td>{log.student?.department || 'N/A'}</td>
+                          <td>{log.student?.level || 'N/A'}</td>
                           <td>{log.course?.course_code || 'N/A'}</td>
                           <td>{new Date(log.date).toLocaleString()}</td>
                           <td>
@@ -1191,75 +1448,74 @@ const AdminDashboard = () => {
                   </Button>
                 </div>
               </div>
-              <div className="table-container">
-                <Table striped bordered hover responsive>
-                  <thead>
-                    <tr>
-                      <th>Course Code</th>
-                      <th>Course Name</th>
-                      <th>Lecturer</th>
-                      <th>Department</th>
-                      <th>Level</th>
-                      <th>Semester</th>
-                      <th>Status</th>
-                      <th>Enrolled</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {courses.length === 0 ? (
-                      <tr>
-                        <td colSpan="9" className="text-center text-muted">
-                          No courses found.
-                        </td>
-                      </tr>
-                    ) : (
-                      courses.map((course) => {
-                        const enrolledCount = students.filter(s => 
-                          s.enrolled_courses?.includes(course.id)
-                        ).length;
-                        return (
-                          <tr key={course.id}>
-                            <td><strong>{course.course_code}</strong></td>
-                            <td>{course.course_name}</td>
-                            <td>{course.lecturer || 'N/A'}</td>
-                            <td>{course.department || 'N/A'}</td>
-                            <td>{course.level || 'N/A'}</td>
-                            <td>{course.semester || 'N/A'}</td>
-                            <td>
-                              <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
-                                {course.is_active !== false ? 'Active' : 'Inactive'}
-                              </Badge>
-                            </td>
-                            <td>
-                              <Badge bg="info">
-                                {enrolledCount}
-                              </Badge>
-                            </td>
-                            <td>
-                              <Button 
-                                variant="warning" 
-                                size="sm" 
-                                className="me-1"
-                                onClick={() => openEditModal(course)}
-                              >
-                                ✏️ Edit
-                              </Button>
-                              <Button 
-                                variant="danger" 
-                                size="sm"
-                                onClick={() => openDeleteModal(course)}
-                              >
-                                🗑️ Delete
-                              </Button>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </Table>
+
+              {/* Semester Toggle for Courses */}
+              <div className="mb-3">
+                <Button.Group>
+                  <Button 
+                    variant={selectedSemester === 'First' ? 'primary' : 'outline-secondary'}
+                    onClick={() => setSelectedSemester('First')}
+                  >
+                    📖 First Semester
+                  </Button>
+                  <Button 
+                    variant={selectedSemester === 'Second' ? 'primary' : 'outline-secondary'}
+                    onClick={() => setSelectedSemester('Second')}
+                    disabled={!secondSemesterEnabled}
+                  >
+                    📖 Second Semester {!secondSemesterEnabled && '🔒'}
+                  </Button>
+                </Button.Group>
               </div>
+
+              {/* Search Bar */}
+              <Form.Group className="mb-3">
+                <Form.Control
+                  type="text"
+                  placeholder="🔍 Search courses by code, name, or department..."
+                  value={courseSearchTerm}
+                  onChange={(e) => setCourseSearchTerm(e.target.value)}
+                />
+              </Form.Group>
+
+              {/* First Semester Courses */}
+              {selectedSemester === 'First' && (
+                <>
+                  <h6 className="mt-3 text-primary">📖 First Semester Courses</h6>
+                  <div className="table-container">
+                    <CourseTable 
+                      courses={filterCoursesBySearch(firstSemesterCourses)}
+                      students={students}
+                      onEdit={openEditModal}
+                      onDelete={openDeleteModal}
+                      onToggleAttendance={toggleCourseAttendance}
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Second Semester Courses */}
+              {selectedSemester === 'Second' && secondSemesterEnabled && (
+                <>
+                  <h6 className="mt-3 text-success">📖 Second Semester Courses</h6>
+                  <div className="table-container">
+                    <CourseTable 
+                      courses={filterCoursesBySearch(secondSemesterCourses)}
+                      students={students}
+                      onEdit={openEditModal}
+                      onDelete={openDeleteModal}
+                      onToggleAttendance={toggleCourseAttendance}
+                    />
+                  </div>
+                </>
+              )}
+
+              {selectedSemester === 'Second' && !secondSemesterEnabled && (
+                <Alert variant="warning">
+                  ⚠️ Second Semester is currently <strong>disabled</strong>. 
+                  Enable it using the toggle at the top of the page.
+                </Alert>
+              )}
             </Card>
           </Tab>
 
@@ -1362,7 +1618,91 @@ const AdminDashboard = () => {
           </Tab>
         </Tabs>
 
-        {/* Add Course Modal with Department, Level, Semester */}
+        {/* Course Table Component */}
+        {(() => {
+          // This is a helper component to avoid duplicate table code
+          const CourseTable = ({ courses, students, onEdit, onDelete, onToggleAttendance }) => {
+            if (courses.length === 0) {
+              return <p className="text-muted text-center py-3">No courses found in this semester.</p>;
+            }
+            return (
+              <Table striped bordered hover responsive>
+                <thead>
+                  <tr>
+                    <th>Course Code</th>
+                    <th>Course Name</th>
+                    <th>Lecturer</th>
+                    <th>Department</th>
+                    <th>Level</th>
+                    <th>Semester</th>
+                    <th>Status</th>
+                    <th>Mark Attendance</th>
+                    <th>Enrolled</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {courses.map((course) => {
+                    const enrolledCount = students.filter(s => 
+                      s.enrolled_courses?.includes(course.id)
+                    ).length;
+                    return (
+                      <tr key={course.id}>
+                        <td><strong>{course.course_code}</strong></td>
+                        <td>{course.course_name}</td>
+                        <td>{course.lecturer || 'N/A'}</td>
+                        <td>{course.department || 'N/A'}</td>
+                        <td>{course.level || 'N/A'}</td>
+                        <td>{course.semester || 'N/A'}</td>
+                        <td>
+                          <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
+                            {course.is_active !== false ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </td>
+                        <td>
+                          <Button 
+                            variant={course.can_mark_attendance !== false ? 'success' : 'danger'}
+                            size="sm"
+                            onClick={() => onToggleAttendance(course.id, course.can_mark_attendance !== false)}
+                          >
+                            {course.can_mark_attendance !== false ? '✅ ON' : '❌ OFF'}
+                          </Button>
+                        </td>
+                        <td>
+                          <Badge bg="info">
+                            {enrolledCount}
+                          </Badge>
+                        </td>
+                        <td>
+                          <Button 
+                            variant="warning" 
+                            size="sm" 
+                            className="me-1"
+                            onClick={() => onEdit(course)}
+                          >
+                            ✏️ Edit
+                          </Button>
+                          <Button 
+                            variant="danger" 
+                            size="sm"
+                            onClick={() => onDelete(course)}
+                          >
+                            🗑️ Delete
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </Table>
+            );
+          };
+          // This is where the CourseTable would render, but since it's inside a function, we need to render it properly
+          // The actual rendering is done in the courses tab above
+          return null;
+        })()}
+
+        {/* Modals - Add Course */}
         <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>Add New Course</Modal.Title>
@@ -1471,6 +1811,21 @@ const AdminDashboard = () => {
                   Inactive courses won't be auto-enrolled to new students
                 </Form.Text>
               </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Allow Attendance Marking</Form.Label>
+                <Form.Select
+                  value={newCourse.can_mark_attendance !== undefined ? newCourse.can_mark_attendance : true}
+                  onChange={(e) => setNewCourse({ ...newCourse, can_mark_attendance: e.target.value === 'true' })}
+                  disabled={modalLoading}
+                >
+                  <option value="true">✅ ON - Students can mark</option>
+                  <option value="false">❌ OFF - Students cannot mark</option>
+                </Form.Select>
+                <Form.Text className="text-muted">
+                  Toggle whether students can mark attendance for this course
+                </Form.Text>
+              </Form.Group>
             </Form>
           </Modal.Body>
           <Modal.Footer>
@@ -1483,7 +1838,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Edit Course Modal with Department, Level, Semester */}
+        {/* Edit Course Modal */}
         <Modal show={showEditModal} onHide={() => setShowEditModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>✏️ Edit Course</Modal.Title>
@@ -1592,6 +1947,21 @@ const AdminDashboard = () => {
                   Inactive courses won't be auto-enrolled to new students
                 </Form.Text>
               </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Allow Attendance Marking</Form.Label>
+                <Form.Select
+                  value={editCourseData.can_mark_attendance !== undefined ? editCourseData.can_mark_attendance : true}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, can_mark_attendance: e.target.value === 'true' })}
+                  disabled={editLoading}
+                >
+                  <option value="true">✅ ON - Students can mark</option>
+                  <option value="false">❌ OFF - Students cannot mark</option>
+                </Form.Select>
+                <Form.Text className="text-muted">
+                  Toggle whether students can mark attendance for this course
+                </Form.Text>
+              </Form.Group>
             </Form>
           </Modal.Body>
           <Modal.Footer>
@@ -1682,6 +2052,73 @@ const AdminDashboard = () => {
             </Button>
             <Button variant="primary" onClick={handleAddDepartment} disabled={departmentLoading}>
               {departmentLoading ? <Spinner size="sm" /> : '✅ Add Department'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Course Attendance List Modal */}
+        <Modal 
+          show={showCourseAttendanceModal} 
+          onHide={() => setShowCourseAttendanceModal(false)} 
+          size="lg"
+        >
+          <Modal.Header closeButton>
+            <Modal.Title>
+              📋 Attendance List: {selectedCourseForAttendance?.course_code} - {selectedCourseForAttendance?.course_name}
+            </Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <div>
+                <Badge bg="info" className="me-2">
+                  Total Students: {courseAttendanceData.length}
+                </Badge>
+                <Badge bg="success">
+                  Total Presents: {courseAttendanceData.reduce((sum, item) => sum + (item.attendance_count || 0), 0)}
+                </Badge>
+              </div>
+              <Button variant="success" size="sm" onClick={exportCourseAttendanceCSV}>
+                📥 Export CSV
+              </Button>
+            </div>
+            <div className="table-container">
+              <Table striped bordered hover responsive>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Full Name</th>
+                    <th>Matric Number</th>
+                    <th>Attendance Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {courseAttendanceData.length === 0 ? (
+                    <tr>
+                      <td colSpan="4" className="text-center text-muted">
+                        No students have marked attendance for this course.
+                      </td>
+                    </tr>
+                  ) : (
+                    courseAttendanceData.map((item, index) => (
+                      <tr key={item.student_id}>
+                        <td>{index + 1}</td>
+                        <td><strong>{item.full_name}</strong></td>
+                        <td>{item.matric_no}</td>
+                        <td>
+                          <Badge bg="primary" className="px-3 py-2">
+                            {item.attendance_count} {item.attendance_count === 1 ? 'day' : 'days'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </Table>
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowCourseAttendanceModal(false)}>
+              Close
             </Button>
           </Modal.Footer>
         </Modal>
