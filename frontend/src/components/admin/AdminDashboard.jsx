@@ -27,6 +27,15 @@ const AdminDashboard = () => {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
   
+  // Semester toggle
+  const [selectedSemester, setSelectedSemester] = useState('First');
+  const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(true);
+  
+  // Course attendance list modal
+  const [showCourseAttendanceModal, setShowCourseAttendanceModal] = useState(false);
+  const [courseAttendanceData, setCourseAttendanceData] = useState([]);
+  const [selectedCourseForAttendance, setSelectedCourseForAttendance] = useState(null);
+  
   // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
   const [debugError, setDebugError] = useState(null);
@@ -35,6 +44,9 @@ const AdminDashboard = () => {
   const [filters, setFilters] = useState({
     courseId: '',
     studentId: '',
+    department: '',
+    level: '',
+    semester: '',
     month: '',
     week: '',
     startDate: '',
@@ -51,7 +63,8 @@ const AdminDashboard = () => {
     department: '',
     level: '',
     semester: '',
-    is_active: true
+    is_active: true,
+    attendance_enabled: true
   });
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
@@ -66,7 +79,8 @@ const AdminDashboard = () => {
     department: '',
     level: '',
     semester: '',
-    is_active: true
+    is_active: true,
+    attendance_enabled: true
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editMessage, setEditMessage] = useState('');
@@ -290,12 +304,15 @@ const AdminDashboard = () => {
         .select(`
           *,
           student:student_id(id, full_name, matric_no),
-          course:course_id(id, course_code, course_name)
+          course:course_id(id, course_code, course_name, department, level, semester)
         `)
         .order('date', { ascending: false });
 
       if (filterObj.courseId) query = query.eq('course_id', filterObj.courseId);
       if (filterObj.studentId) query = query.eq('student_id', filterObj.studentId);
+      if (filterObj.department) query = query.eq('course.department', filterObj.department);
+      if (filterObj.level) query = query.eq('course.level', filterObj.level);
+      if (filterObj.semester) query = query.eq('course.semester', filterObj.semester);
       if (filterObj.month) {
         const start = new Date(filterObj.month + '-01');
         const end = new Date(filterObj.month + '-01');
@@ -421,6 +438,9 @@ const AdminDashboard = () => {
     const activeFilters = {};
     if (filters.courseId) activeFilters.courseId = filters.courseId;
     if (filters.studentId) activeFilters.studentId = filters.studentId;
+    if (filters.department) activeFilters.department = filters.department;
+    if (filters.level) activeFilters.level = filters.level;
+    if (filters.semester) activeFilters.semester = filters.semester;
     if (filters.month) activeFilters.month = filters.month;
     if (filters.week) activeFilters.week = filters.week;
     if (filters.startDate && filters.endDate) {
@@ -440,7 +460,24 @@ const AdminDashboard = () => {
       );
     }
     
+    // Group logs by student for counting
+    const groupedLogs = {};
+    logs.forEach(log => {
+      const key = log.student_id;
+      if (!groupedLogs[key]) {
+        groupedLogs[key] = {
+          student: log.student,
+          course: log.course,
+          count: 0,
+          dates: []
+        };
+      }
+      groupedLogs[key].count++;
+      groupedLogs[key].dates.push(new Date(log.date).toLocaleDateString());
+    });
+    
     setFilteredLogs(logs || []);
+    setFilteredLogs(Object.values(groupedLogs));
   };
 
   // Reset filters
@@ -448,6 +485,9 @@ const AdminDashboard = () => {
     setFilters({
       courseId: '',
       studentId: '',
+      department: '',
+      level: '',
+      semester: '',
       month: '',
       week: '',
       startDate: '',
@@ -455,7 +495,21 @@ const AdminDashboard = () => {
       searchQuery: ''
     });
     const logs = await fetchAttendanceLogs({});
-    setFilteredLogs(logs || []);
+    const groupedLogs = {};
+    logs.forEach(log => {
+      const key = log.student_id;
+      if (!groupedLogs[key]) {
+        groupedLogs[key] = {
+          student: log.student,
+          course: log.course,
+          count: 0,
+          dates: []
+        };
+      }
+      groupedLogs[key].count++;
+      groupedLogs[key].dates.push(new Date(log.date).toLocaleDateString());
+    });
+    setFilteredLogs(Object.values(groupedLogs));
   };
 
   // Handle adding new course with department, level, semester
@@ -463,7 +517,6 @@ const AdminDashboard = () => {
     setModalLoading(true);
     setModalMessage('');
 
-    // Validate required fields
     if (!newCourse.department) {
       setModalMessage('❌ Please select a department.');
       setModalLoading(false);
@@ -490,7 +543,8 @@ const AdminDashboard = () => {
           department: newCourse.department,
           level: newCourse.level,
           semester: newCourse.semester,
-          is_active: newCourse.is_active !== undefined ? newCourse.is_active : true
+          is_active: newCourse.is_active !== undefined ? newCourse.is_active : true,
+          attendance_enabled: newCourse.attendance_enabled !== undefined ? newCourse.attendance_enabled : true
         });
 
       if (error) throw error;
@@ -503,7 +557,8 @@ const AdminDashboard = () => {
         department: '',
         level: '',
         semester: '',
-        is_active: true
+        is_active: true,
+        attendance_enabled: true
       });
       
       const { data: coursesData } = await supabase
@@ -512,7 +567,6 @@ const AdminDashboard = () => {
         .order('course_code');
       setCourses(coursesData || []);
 
-      // Re-enroll existing students based on department/level
       await reEnrollStudents();
 
       setTimeout(() => {
@@ -544,7 +598,8 @@ const AdminDashboard = () => {
           department: editCourseData.department,
           level: editCourseData.level,
           semester: editCourseData.semester,
-          is_active: editCourseData.is_active !== undefined ? editCourseData.is_active : true
+          is_active: editCourseData.is_active !== undefined ? editCourseData.is_active : true,
+          attendance_enabled: editCourseData.attendance_enabled !== undefined ? editCourseData.attendance_enabled : true
         })
         .eq('id', editingCourse.id);
 
@@ -559,7 +614,6 @@ const AdminDashboard = () => {
         .order('course_code');
       setCourses(coursesData || []);
 
-      // Re-enroll existing students based on department/level
       await reEnrollStudents();
 
       setTimeout(() => {
@@ -583,7 +637,6 @@ const AdminDashboard = () => {
     setDeleteMessage('');
 
     try {
-      // Step 1: Get all students who have this course enrolled
       const { data: enrolledStudents, error: fetchError } = await supabase
         .from('users')
         .select('id, enrolled_courses')
@@ -593,7 +646,6 @@ const AdminDashboard = () => {
         addDebug(`⚠️ Error finding enrolled students: ${fetchError.message}`, true);
       }
 
-      // Step 2: Remove the course from each student's enrolled_courses
       if (enrolledStudents && enrolledStudents.length > 0) {
         for (let student of enrolledStudents) {
           const updatedCourses = (student.enrolled_courses || [])
@@ -611,7 +663,6 @@ const AdminDashboard = () => {
         addDebug(`✅ Removed course from ${enrolledStudents.length} student(s)`);
       }
 
-      // Step 3: Delete attendance records for this course
       const { error: attError } = await supabase
         .from('attendance')
         .delete()
@@ -624,7 +675,6 @@ const AdminDashboard = () => {
         addDebug(`✅ Deleted attendance records for course`);
       }
 
-      // Step 4: Delete the course from courses table
       const { error: courseError } = await supabase
         .from('courses')
         .delete()
@@ -774,7 +824,8 @@ const AdminDashboard = () => {
       department: course.department || '',
       level: course.level || '',
       semester: course.semester || '',
-      is_active: course.is_active !== undefined ? course.is_active : true
+      is_active: course.is_active !== undefined ? course.is_active : true,
+      attendance_enabled: course.attendance_enabled !== undefined ? course.attendance_enabled : true
     });
     setEditMessage('');
     setShowEditModal(true);
@@ -787,21 +838,43 @@ const AdminDashboard = () => {
     setShowDeleteModal(true);
   };
 
-  // Export attendance logs to CSV
-  const exportCSV = () => {
-    if (filteredLogs.length === 0) {
+  // Open course attendance modal
+  const openCourseAttendanceModal = async (course) => {
+    setSelectedCourseForAttendance(course);
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('attendance')
+        .select(`
+          *,
+          student:student_id(id, full_name, matric_no)
+        `)
+        .eq('course_id', course.id)
+        .order('date', { ascending: false });
+
+      if (error) throw error;
+      setCourseAttendanceData(data || []);
+      setShowCourseAttendanceModal(true);
+    } catch (error) {
+      console.error('Error fetching course attendance:', error);
+      alert('Error loading attendance data');
+    }
+    setLoading(false);
+  };
+
+  // Export course attendance to CSV
+  const exportCourseAttendance = () => {
+    if (courseAttendanceData.length === 0) {
       alert('No data to export.');
       return;
     }
 
-    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Date', 'Status'];
-    const rows = filteredLogs.map(log => [
-      log.student?.full_name || 'N/A',
-      log.student?.matric_no || 'N/A',
-      log.course?.course_code || 'N/A',
-      log.course?.course_name || 'N/A',
-      new Date(log.date).toLocaleString(),
-      log.status || 'present'
+    const headers = ['Student Name', 'Matric No', 'Date', 'Status'];
+    const rows = courseAttendanceData.map(record => [
+      record.student?.full_name || 'N/A',
+      record.student?.matric_no || 'N/A',
+      new Date(record.date).toLocaleString(),
+      record.status || 'present'
     ]);
 
     const csvContent = [
@@ -813,7 +886,56 @@ const AdminDashboard = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `attendance_logs_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `${selectedCourseForAttendance?.course_code}_attendance_${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // Toggle course attendance
+  const toggleCourseAttendance = async (courseId, currentStatus) => {
+    try {
+      const { error } = await supabase
+        .from('courses')
+        .update({ attendance_enabled: !currentStatus })
+        .eq('id', courseId);
+
+      if (error) throw error;
+      
+      setCourses(courses.map(c => 
+        c.id === courseId ? { ...c, attendance_enabled: !currentStatus } : c
+      ));
+      addDebug(`✅ Course attendance ${!currentStatus ? 'enabled' : 'disabled'}`);
+    } catch (error) {
+      addDebug(`❌ Error toggling attendance: ${error.message}`, true);
+    }
+  };
+
+  // Export attendance logs to CSV
+  const exportCSV = () => {
+    if (filteredLogs.length === 0) {
+      alert('No data to export.');
+      return;
+    }
+
+    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Attendance Count'];
+    const rows = filteredLogs.map(log => [
+      log.student?.full_name || 'N/A',
+      log.student?.matric_no || 'N/A',
+      log.course?.course_code || 'N/A',
+      log.course?.course_name || 'N/A',
+      log.count || 0
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `attendance_summary_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
   };
@@ -854,6 +976,34 @@ const AdminDashboard = () => {
             <span className="badge bg-primary me-2">Admin: {user?.full_name}</span>
           </div>
         </div>
+
+        {/* Semester Toggle */}
+        <Card className="mb-4 p-3">
+          <Row className="align-items-center">
+            <Col md={6}>
+              <h6 className="mb-0">📅 Semester View</h6>
+            </Col>
+            <Col md={6}>
+              <div className="d-flex gap-3 justify-content-end align-items-center">
+                <Form.Check
+                  type="switch"
+                  id="semester-switch"
+                  label="Second Semester"
+                  checked={secondSemesterEnabled}
+                  onChange={(e) => setSecondSemesterEnabled(e.target.checked)}
+                />
+                <Form.Select
+                  value={selectedSemester}
+                  onChange={(e) => setSelectedSemester(e.target.value)}
+                  style={{ width: 'auto' }}
+                >
+                  <option value="First">First Semester</option>
+                  <option value="Second">Second Semester</option>
+                </Form.Select>
+              </div>
+            </Col>
+          </Row>
+        </Card>
 
         {/* Debug Panel */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
@@ -1036,6 +1186,51 @@ const AdminDashboard = () => {
                   </Col>
                   <Col md={3}>
                     <Form.Group>
+                      <Form.Label>Department</Form.Label>
+                      <Form.Select
+                        name="department"
+                        value={filters.department}
+                        onChange={handleFilterChange}
+                      >
+                        <option value="">All Departments</option>
+                        {departments.map(d => (
+                          <option key={d.id} value={d.name}>{d.name}</option>
+                        ))}
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Level</Form.Label>
+                      <Form.Select
+                        name="level"
+                        value={filters.level}
+                        onChange={handleFilterChange}
+                      >
+                        <option value="">All Levels</option>
+                        <option value="ND1">ND1</option>
+                        <option value="ND2">ND2</option>
+                        <option value="HND1">HND1</option>
+                        <option value="HND2">HND2</option>
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
+                      <Form.Label>Semester</Form.Label>
+                      <Form.Select
+                        name="semester"
+                        value={filters.semester}
+                        onChange={handleFilterChange}
+                      >
+                        <option value="">All Semesters</option>
+                        <option value="First">First Semester</option>
+                        <option value="Second">Second Semester</option>
+                      </Form.Select>
+                    </Form.Group>
+                  </Col>
+                  <Col md={3}>
+                    <Form.Group>
                       <Form.Label>Course</Form.Label>
                       <Form.Select
                         name="courseId"
@@ -1068,7 +1263,7 @@ const AdminDashboard = () => {
                       </Form.Select>
                     </Form.Group>
                   </Col>
-                  <Col md={2}>
+                  <Col md={3}>
                     <Form.Group>
                       <Form.Label>Month</Form.Label>
                       <Form.Control
@@ -1079,7 +1274,7 @@ const AdminDashboard = () => {
                       />
                     </Form.Group>
                   </Col>
-                  <Col md={2}>
+                  <Col md={3}>
                     <Form.Group>
                       <Form.Label>Week (YYYY-WW)</Form.Label>
                       <Form.Control
@@ -1123,7 +1318,7 @@ const AdminDashboard = () => {
                           Reset
                         </Button>
                         <Button variant="success" onClick={exportCSV}>
-                          📥 Export CSV
+                          📥 Export Summary CSV
                         </Button>
                       </Col>
                     </Row>
@@ -1132,15 +1327,15 @@ const AdminDashboard = () => {
               </div>
 
               <div className="table-container">
-                <h6 className="mb-2">Showing {filteredLogs.length} record(s)</h6>
+                <h6 className="mb-2">Showing {filteredLogs.length} student(s) with attendance</h6>
                 <Table striped bordered hover responsive>
                   <thead>
                     <tr>
                       <th>Student</th>
                       <th>Matric No</th>
                       <th>Course</th>
-                      <th>Date</th>
-                      <th>Status</th>
+                      <th>Attendance Count</th>
+                      <th>Dates</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1151,19 +1346,16 @@ const AdminDashboard = () => {
                         </td>
                       </tr>
                     ) : (
-                      filteredLogs.map((log) => (
-                        <tr key={log.id}>
+                      filteredLogs.map((log, index) => (
+                        <tr key={index}>
                           <td>{log.student?.full_name || 'N/A'}</td>
                           <td>{log.student?.matric_no || 'N/A'}</td>
                           <td>{log.course?.course_code || 'N/A'}</td>
-                          <td>{new Date(log.date).toLocaleString()}</td>
                           <td>
-                            <Badge 
-                              bg={log.status === 'present' ? 'success' : 'danger'}
-                              className="px-3 py-2"
-                            >
-                              {log.status === 'present' ? '✅ Present' : '❌ Absent'}
-                            </Badge>
+                            <Badge bg="primary">{log.count || 0}</Badge>
+                          </td>
+                          <td>
+                            <small>{log.dates?.join(', ') || 'N/A'}</small>
                           </td>
                         </tr>
                       ))
@@ -1191,6 +1383,19 @@ const AdminDashboard = () => {
                   </Button>
                 </div>
               </div>
+              
+              {/* Course Search */}
+              <Form.Group className="mb-3">
+                <Form.Control
+                  type="text"
+                  placeholder="🔍 Search courses by code or name..."
+                  value={courseSearch}
+                  onChange={(e) => setCourseSearch(e.target.value)}
+                />
+              </Form.Group>
+
+              {/* First Semester Courses */}
+              <h6 className="mt-3">📘 First Semester Courses</h6>
               <div className="table-container">
                 <Table striped bordered hover responsive>
                   <thead>
@@ -1200,21 +1405,21 @@ const AdminDashboard = () => {
                       <th>Lecturer</th>
                       <th>Department</th>
                       <th>Level</th>
-                      <th>Semester</th>
                       <th>Status</th>
+                      <th>Attendance</th>
                       <th>Enrolled</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {courses.length === 0 ? (
+                    {filteredCourses.filter(c => c.semester === 'First' && (secondSemesterEnabled ? true : c.semester === 'First')).length === 0 ? (
                       <tr>
                         <td colSpan="9" className="text-center text-muted">
-                          No courses found.
+                          No First Semester courses found.
                         </td>
                       </tr>
                     ) : (
-                      courses.map((course) => {
+                      filteredCourses.filter(c => c.semester === 'First' && (secondSemesterEnabled ? true : c.semester === 'First')).map((course) => {
                         const enrolledCount = students.filter(s => 
                           s.enrolled_courses?.includes(course.id)
                         ).length;
@@ -1225,10 +1430,18 @@ const AdminDashboard = () => {
                             <td>{course.lecturer || 'N/A'}</td>
                             <td>{course.department || 'N/A'}</td>
                             <td>{course.level || 'N/A'}</td>
-                            <td>{course.semester || 'N/A'}</td>
                             <td>
                               <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
                                 {course.is_active !== false ? 'Active' : 'Inactive'}
+                              </Badge>
+                            </td>
+                            <td>
+                              <Badge 
+                                bg={course.attendance_enabled !== false ? 'success' : 'danger'}
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => toggleCourseAttendance(course.id, course.attendance_enabled !== false)}
+                              >
+                                {course.attendance_enabled !== false ? 'ON' : 'OFF'}
                               </Badge>
                             </td>
                             <td>
@@ -1237,6 +1450,14 @@ const AdminDashboard = () => {
                               </Badge>
                             </td>
                             <td>
+                              <Button 
+                                variant="info" 
+                                size="sm" 
+                                className="me-1"
+                                onClick={() => openCourseAttendanceModal(course)}
+                              >
+                                📊 View
+                              </Button>
                               <Button 
                                 variant="warning" 
                                 size="sm" 
@@ -1260,6 +1481,98 @@ const AdminDashboard = () => {
                   </tbody>
                 </Table>
               </div>
+
+              {/* Second Semester Courses */}
+              {secondSemesterEnabled && (
+                <>
+                  <h6 className="mt-4">📗 Second Semester Courses</h6>
+                  <div className="table-container">
+                    <Table striped bordered hover responsive>
+                      <thead>
+                        <tr>
+                          <th>Course Code</th>
+                          <th>Course Name</th>
+                          <th>Lecturer</th>
+                          <th>Department</th>
+                          <th>Level</th>
+                          <th>Status</th>
+                          <th>Attendance</th>
+                          <th>Enrolled</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredCourses.filter(c => c.semester === 'Second' && (secondSemesterEnabled ? true : c.semester === 'First')).length === 0 ? (
+                          <tr>
+                            <td colSpan="9" className="text-center text-muted">
+                              No Second Semester courses found.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredCourses.filter(c => c.semester === 'Second' && (secondSemesterEnabled ? true : c.semester === 'First')).map((course) => {
+                            const enrolledCount = students.filter(s => 
+                              s.enrolled_courses?.includes(course.id)
+                            ).length;
+                            return (
+                              <tr key={course.id}>
+                                <td><strong>{course.course_code}</strong></td>
+                                <td>{course.course_name}</td>
+                                <td>{course.lecturer || 'N/A'}</td>
+                                <td>{course.department || 'N/A'}</td>
+                                <td>{course.level || 'N/A'}</td>
+                                <td>
+                                  <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
+                                    {course.is_active !== false ? 'Active' : 'Inactive'}
+                                  </Badge>
+                                </td>
+                                <td>
+                                  <Badge 
+                                    bg={course.attendance_enabled !== false ? 'success' : 'danger'}
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => toggleCourseAttendance(course.id, course.attendance_enabled !== false)}
+                                  >
+                                    {course.attendance_enabled !== false ? 'ON' : 'OFF'}
+                                  </Badge>
+                                </td>
+                                <td>
+                                  <Badge bg="info">
+                                    {enrolledCount}
+                                  </Badge>
+                                </td>
+                                <td>
+                                  <Button 
+                                    variant="info" 
+                                    size="sm" 
+                                    className="me-1"
+                                    onClick={() => openCourseAttendanceModal(course)}
+                                  >
+                                    📊 View
+                                  </Button>
+                                  <Button 
+                                    variant="warning" 
+                                    size="sm" 
+                                    className="me-1"
+                                    onClick={() => openEditModal(course)}
+                                  >
+                                    ✏️ Edit
+                                  </Button>
+                                  <Button 
+                                    variant="danger" 
+                                    size="sm"
+                                    onClick={() => openDeleteModal(course)}
+                                  >
+                                    🗑️ Delete
+                                  </Button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </Table>
+                  </div>
+                </>
+              )}
             </Card>
           </Tab>
 
@@ -1362,6 +1675,64 @@ const AdminDashboard = () => {
           </Tab>
         </Tabs>
 
+        {/* Course Attendance Modal */}
+        <Modal show={showCourseAttendanceModal} onHide={() => setShowCourseAttendanceModal(false)} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>
+              📊 Course Attendance - {selectedCourseForAttendance?.course_code} ({selectedCourseForAttendance?.course_name})
+            </Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <div className="d-flex justify-content-between mb-3">
+              <div>
+                <strong>Total Attendance Records:</strong> {courseAttendanceData.length}
+              </div>
+              <Button variant="success" size="sm" onClick={exportCourseAttendance}>
+                📥 Export CSV
+              </Button>
+            </div>
+            <div className="table-container">
+              <Table striped bordered hover responsive>
+                <thead>
+                  <tr>
+                    <th>Student Name</th>
+                    <th>Matric No</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {courseAttendanceData.length === 0 ? (
+                    <tr>
+                      <td colSpan="4" className="text-center text-muted">
+                        No attendance records for this course.
+                      </td>
+                    </tr>
+                  ) : (
+                    courseAttendanceData.map((record) => (
+                      <tr key={record.id}>
+                        <td>{record.student?.full_name || 'N/A'}</td>
+                        <td>{record.student?.matric_no || 'N/A'}</td>
+                        <td>{new Date(record.date).toLocaleString()}</td>
+                        <td>
+                          <Badge bg={record.status === 'present' ? 'success' : 'danger'}>
+                            {record.status === 'present' ? '✅ Present' : '❌ Absent'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </Table>
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowCourseAttendanceModal(false)}>
+              Close
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
         {/* Add Course Modal with Department, Level, Semester */}
         <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
           <Modal.Header closeButton>
@@ -1457,20 +1828,37 @@ const AdminDashboard = () => {
                 </Form.Select>
               </Form.Group>
 
-              <Form.Group className="mb-3">
-                <Form.Label>Status</Form.Label>
-                <Form.Select
-                  value={newCourse.is_active !== undefined ? newCourse.is_active : true}
-                  onChange={(e) => setNewCourse({ ...newCourse, is_active: e.target.value === 'true' })}
-                  disabled={modalLoading}
-                >
-                  <option value="true">Active</option>
-                  <option value="false">Inactive</option>
-                </Form.Select>
-                <Form.Text className="text-muted">
-                  Inactive courses won't be auto-enrolled to new students
-                </Form.Text>
-              </Form.Group>
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={newCourse.is_active !== undefined ? newCourse.is_active : true}
+                      onChange={(e) => setNewCourse({ ...newCourse, is_active: e.target.value === 'true' })}
+                      disabled={modalLoading}
+                    >
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </Form.Select>
+                    <Form.Text className="text-muted">
+                      Inactive courses won't be auto-enrolled
+                    </Form.Text>
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Attendance</Form.Label>
+                    <Form.Select
+                      value={newCourse.attendance_enabled !== undefined ? newCourse.attendance_enabled : true}
+                      onChange={(e) => setNewCourse({ ...newCourse, attendance_enabled: e.target.value === 'true' })}
+                      disabled={modalLoading}
+                    >
+                      <option value="true">ON (Students can mark)</option>
+                      <option value="false">OFF (Students cannot mark)</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
             </Form>
           </Modal.Body>
           <Modal.Footer>
@@ -1483,7 +1871,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Edit Course Modal with Department, Level, Semester */}
+        {/* Edit Course Modal */}
         <Modal show={showEditModal} onHide={() => setShowEditModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>✏️ Edit Course</Modal.Title>
@@ -1578,20 +1966,34 @@ const AdminDashboard = () => {
                 </Form.Select>
               </Form.Group>
 
-              <Form.Group className="mb-3">
-                <Form.Label>Status</Form.Label>
-                <Form.Select
-                  value={editCourseData.is_active !== undefined ? editCourseData.is_active : true}
-                  onChange={(e) => setEditCourseData({ ...editCourseData, is_active: e.target.value === 'true' })}
-                  disabled={editLoading}
-                >
-                  <option value="true">Active</option>
-                  <option value="false">Inactive</option>
-                </Form.Select>
-                <Form.Text className="text-muted">
-                  Inactive courses won't be auto-enrolled to new students
-                </Form.Text>
-              </Form.Group>
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Status</Form.Label>
+                    <Form.Select
+                      value={editCourseData.is_active !== undefined ? editCourseData.is_active : true}
+                      onChange={(e) => setEditCourseData({ ...editCourseData, is_active: e.target.value === 'true' })}
+                      disabled={editLoading}
+                    >
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Attendance</Form.Label>
+                    <Form.Select
+                      value={editCourseData.attendance_enabled !== undefined ? editCourseData.attendance_enabled : true}
+                      onChange={(e) => setEditCourseData({ ...editCourseData, attendance_enabled: e.target.value === 'true' })}
+                      disabled={editLoading}
+                    >
+                      <option value="true">ON (Students can mark)</option>
+                      <option value="false">OFF (Students cannot mark)</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
             </Form>
           </Modal.Body>
           <Modal.Footer>
