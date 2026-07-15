@@ -101,8 +101,6 @@ const MarkAttendance = () => {
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
         setCourses(coursesData || []);
         
-        // ✅ FIX: Auto-select first UNMARKED course only after todayAttendance is loaded
-        // This will be handled in fetchTodayAttendance
       } else {
         addDebug('⚠️ No enrolled courses found');
         setCourses([]);
@@ -137,21 +135,36 @@ const MarkAttendance = () => {
       setTodayAttendance(marked);
       addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
       
-      // ✅ FIX: Auto-select first UNMARKED course after todayAttendance is loaded
+      // Auto-select first UNMARKED AND ACTIVE course
       if (courses.length > 0) {
-        const firstUnmarked = courses.find(c => !marked.includes(c.id));
+        const firstUnmarked = courses.find(c => !marked.includes(c.id) && c.attendance_enabled !== false && c.is_active !== false);
         if (firstUnmarked) {
           setSelectedCourse(firstUnmarked.id);
           addDebug(`🔄 Auto-selected unmarked course: ${firstUnmarked.course_code}`);
         } else {
-          // All courses are marked
-          setSelectedCourse('');
-          addDebug('✅ All courses marked today!');
+          // Check if all courses are either marked or inactive
+          const hasUnmarkedInactive = courses.some(c => !marked.includes(c.id) && (c.attendance_enabled === false || c.is_active === false));
+          if (hasUnmarkedInactive) {
+            // There are inactive courses, don't auto-select
+            setSelectedCourse('');
+            addDebug('⚠️ Some courses are inactive or not started');
+          } else {
+            setSelectedCourse('');
+            addDebug('✅ All courses marked today!');
+          }
         }
       }
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
+  };
+
+  // ✅ CHECK: Can student mark attendance for this course?
+  const canMarkCourse = (course) => {
+    if (!course) return false;
+    if (course.is_active === false) return 'inactive';
+    if (course.attendance_enabled === false) return 'not_started';
+    return 'available';
   };
 
   const handleMarkAttendance = async () => {
@@ -161,7 +174,22 @@ const MarkAttendance = () => {
       return;
     }
 
-    // ✅ FIX: Check if already marked before proceeding
+    // ✅ CHECK course status before proceeding
+    const selectedCourseData = courses.find(c => c.id === selectedCourse);
+    const status = canMarkCourse(selectedCourseData);
+
+    if (status === 'inactive') {
+      setMessage('⏳ This course is currently inactive. Please contact your lecturer.');
+      setMessageType('warning');
+      return;
+    }
+
+    if (status === 'not_started') {
+      setMessage('⏳ Class hasn\'t commenced yet for this course. Please check back later.');
+      setMessageType('warning');
+      return;
+    }
+
     if (todayAttendance.includes(selectedCourse)) {
       setMessage('⚠️ You have already marked attendance for this course today.');
       setMessageType('warning');
@@ -237,7 +265,7 @@ const MarkAttendance = () => {
         return;
       }
 
-      // Double check if already marked (in case UI is out of sync)
+      // Double check if already marked
       if (todayAttendance.includes(selectedCourse)) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
@@ -259,7 +287,6 @@ const MarkAttendance = () => {
         throw insertError;
       }
 
-      // Update today's attendance list
       const updatedMarked = [...todayAttendance, selectedCourse];
       setTodayAttendance(updatedMarked);
       addDebug('✅ Attendance saved successfully');
@@ -272,8 +299,8 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
       }
 
-      // Auto-select next unmarked course
-      const nextUnmarked = courses.find(c => !updatedMarked.includes(c.id));
+      // Auto-select next unmarked AND ACTIVE course
+      const nextUnmarked = courses.find(c => !updatedMarked.includes(c.id) && c.attendance_enabled !== false && c.is_active !== false);
       if (nextUnmarked) {
         setTimeout(() => {
           setSelectedCourse(nextUnmarked.id);
@@ -283,7 +310,7 @@ const MarkAttendance = () => {
       } else {
         setTimeout(() => {
           setSelectedCourse('');
-          addDebug('✅ All courses marked today!');
+          addDebug('✅ All available courses marked today!');
           setFaceMatched(false);
         }, 1500);
       }
@@ -305,8 +332,13 @@ const MarkAttendance = () => {
     return courses.find(c => c.id === selectedCourse);
   };
 
+  // ✅ Filter courses by status for display
   const markedCourses = courses.filter(c => todayAttendance.includes(c.id));
   const unmarkedCourses = courses.filter(c => !todayAttendance.includes(c.id));
+  
+  // ✅ Filter unmarked courses that are available to mark
+  const availableUnmarkedCourses = unmarkedCourses.filter(c => c.attendance_enabled !== false && c.is_active !== false);
+  const inactiveUnmarkedCourses = unmarkedCourses.filter(c => c.attendance_enabled === false || c.is_active === false);
 
   return (
     <Container className="mt-4">
@@ -314,7 +346,7 @@ const MarkAttendance = () => {
         <h2 className="mb-4">📷 Mark Attendance</h2>
 
         <Row>
-          {/* Camera Section - Left Side */}
+          {/* Camera Section */}
           <Col md={7}>
             <Card className="p-3 shadow-lg">
               <h5 className="mb-3">📹 Live Camera</h5>
@@ -372,13 +404,13 @@ const MarkAttendance = () => {
                 </div>
                 <div>
                   <small className="text-muted">
-                    📊 {todayAttendance.length} / {courses.length} marked
+                    📊 {todayAttendance.length} / {courses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length} available marked
                   </small>
                 </div>
               </div>
 
-              {/* MARK ATTENDANCE BUTTON - RIGHT UNDER CAMERA */}
-              {unmarkedCourses.length > 0 ? (
+              {/* MARK ATTENDANCE BUTTON */}
+              {availableUnmarkedCourses.length > 0 ? (
                 <Button
                   variant="success"
                   onClick={handleMarkAttendance}
@@ -397,7 +429,7 @@ const MarkAttendance = () => {
                   )}
                 </Button>
               ) : (
-                courses.length > 0 && (
+                courses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length > 0 && (
                   <Button
                     variant="success"
                     disabled={true}
@@ -405,14 +437,14 @@ const MarkAttendance = () => {
                     size="lg"
                     style={{ padding: '15px', fontSize: '1.2rem', borderRadius: '10px' }}
                   >
-                    ✅ All Courses Marked Today! 🎉
+                    ✅ All Available Courses Marked Today! 🎉
                   </Button>
                 )
               )}
             </Card>
           </Col>
 
-          {/* Controls Section - Right Side */}
+          {/* Controls Section */}
           <Col md={5}>
             <Card className="p-3 shadow-lg">
               <h5 className="mb-3">📚 Course Selection</h5>
@@ -422,14 +454,16 @@ const MarkAttendance = () => {
                 <div className="d-flex justify-content-between align-items-center">
                   <span>📊 Today's Progress:</span>
                   <Badge bg="primary" className="p-2">
-                    {todayAttendance.length} / {courses.length} marked
+                    {todayAttendance.length} / {courses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length} marked
                   </Badge>
                 </div>
                 <div className="mt-1" style={{ height: '6px', background: '#e9ecef', borderRadius: '3px' }}>
                   <div 
                     style={{ 
                       height: '6px', 
-                      width: courses.length > 0 ? `${(todayAttendance.length / courses.length) * 100}%` : '0%',
+                      width: courses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length > 0 
+                        ? `${(todayAttendance.length / courses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length) * 100}%` 
+                        : '0%',
                       background: 'linear-gradient(90deg, #28a745, #20c997)',
                       borderRadius: '3px',
                       transition: 'width 0.5s ease'
@@ -456,11 +490,11 @@ const MarkAttendance = () => {
                 </Alert>
               ) : (
                 <>
-                  {/* Unmarked Courses */}
-                  {unmarkedCourses.length > 0 && (
+                  {/* Available Courses to Mark */}
+                  {availableUnmarkedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
-                        ✅ Courses to Mark ({unmarkedCourses.length}):
+                        ✅ Available to Mark ({availableUnmarkedCourses.length}):
                       </Form.Label>
                       <Form.Select
                         value={selectedCourse}
@@ -468,12 +502,45 @@ const MarkAttendance = () => {
                         disabled={isMarking}
                         style={{ fontSize: '1rem', padding: '10px', borderColor: '#28a745' }}
                       >
-                        {unmarkedCourses.map((course) => (
+                        {availableUnmarkedCourses.map((course) => (
                           <option key={course.id} value={course.id}>
-                            {course.course_code} - {course.course_name} ⏳
+                            {course.course_code} - {course.course_name} ✅
                           </option>
                         ))}
                       </Form.Select>
+                    </div>
+                  )}
+
+                  {/* Inactive/Not Started Courses */}
+                  {inactiveUnmarkedCourses.length > 0 && (
+                    <div className="mb-3">
+                      <Form.Label className="fw-bold" style={{ color: '#ffc107' }}>
+                        ⏳ Inactive / Not Started ({inactiveUnmarkedCourses.length}):
+                      </Form.Label>
+                      <div className="p-2 bg-light rounded" style={{ border: '1px solid #ffc107', maxHeight: '100px', overflowY: 'auto' }}>
+                        {inactiveUnmarkedCourses.map((course) => {
+                          const isInactive = course.is_active === false;
+                          const isNotStarted = course.attendance_enabled === false;
+                          let statusText = '';
+                          let statusColor = '#6c757d';
+                          
+                          if (isInactive) {
+                            statusText = '⏳ Inactive';
+                            statusColor = '#6c757d';
+                          } else if (isNotStarted) {
+                            statusText = '⏳ Not Started';
+                            statusColor = '#ffc107';
+                          }
+                          
+                          return (
+                            <div key={course.id} className="d-flex align-items-center gap-2">
+                              <Badge bg="secondary">⏳</Badge>
+                              <span className="text-muted">{course.course_code} - {course.course_name}</span>
+                              <small style={{ color: statusColor }}>({statusText})</small>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
 
@@ -483,7 +550,7 @@ const MarkAttendance = () => {
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
                         ✅ Already Marked Today ({markedCourses.length}):
                       </Form.Label>
-                      <div className="p-2 bg-light rounded" style={{ border: '1px solid #dee2e6', maxHeight: '150px', overflowY: 'auto' }}>
+                      <div className="p-2 bg-light rounded" style={{ border: '1px solid #dee2e6', maxHeight: '100px', overflowY: 'auto' }}>
                         {markedCourses.map((course) => (
                           <div key={course.id} className="d-flex align-items-center gap-2">
                             <Badge bg="success">✅</Badge>
@@ -494,8 +561,8 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* Selected Course Info - only show if a course is selected and unmarked */}
-                  {getSelectedCourseDetails() && selectedCourse && unmarkedCourses.length > 0 && (
+                  {/* Selected Course Info */}
+                  {getSelectedCourseDetails() && selectedCourse && availableUnmarkedCourses.length > 0 && (
                     <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745' }}>
                       <div className="d-flex justify-content-between align-items-center">
                         <div>
@@ -513,11 +580,15 @@ const MarkAttendance = () => {
                   )}
 
                   {/* All Done Message */}
-                  {unmarkedCourses.length === 0 && courses.length > 0 && (
+                  {availableUnmarkedCourses.length === 0 && courses.length > 0 && (
                     <div className="text-center mt-2">
                       <div style={{ fontSize: '32px' }}>🎉</div>
-                      <p className="text-success fw-bold">All courses marked today!</p>
-                      <small className="text-muted">Great job! Come back tomorrow.</small>
+                      <p className="text-success fw-bold">All available courses marked today!</p>
+                      {inactiveUnmarkedCourses.length > 0 && (
+                        <small className="text-muted">
+                          ({inactiveUnmarkedCourses.length} course(s) inactive or not started)
+                        </small>
+                      )}
                     </div>
                   )}
                 </>
