@@ -199,7 +199,6 @@ const AdminDashboard = () => {
 
     addDebug(`📊 Loading stats for course: ${courseId}`);
     try {
-      // Get all attendance for this course
       let query = supabase
         .from('attendance')
         .select(`
@@ -215,21 +214,16 @@ const AdminDashboard = () => {
       const { data: logs, error } = await query;
       if (error) throw error;
 
-      // Calculate stats
       const total = logs?.length || 0;
       const present = logs?.filter(a => a.status === 'present').length || 0;
       
-      // Today's stats
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayLogs = logs?.filter(a => new Date(a.date) >= today) || [];
       const todayPresent = todayLogs.filter(a => a.status === 'present').length || 0;
       const todayTotal = todayLogs.length;
 
-      // Get student names
       const studentNames = [...new Set(logs?.map(a => a.student?.full_name).filter(Boolean))];
-
-      // Get course details
       const course = courses.find(c => c.id === courseId);
 
       setSelectedCourseStats({
@@ -357,7 +351,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // Handle Enroll Students
+  // ✅ FIXED: Handle Enroll Students with VERIFICATION
   const handleEnrollStudents = async () => {
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -366,47 +360,108 @@ const AdminDashboard = () => {
 
     setEnrollLoading(true);
     setEnrollMessage('');
+    addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
 
     try {
       let successCount = 0;
+      let failCount = 0;
+      let alreadyEnrolledCount = 0;
       
       for (let studentId of selectedStudents) {
+        addDebug(`🔵 Processing student: ${studentId}`);
+        
+        // Step 1: Get current enrolled courses
         const { data: studentData, error: fetchError } = await supabase
           .from('users')
           .select('id, full_name, email, enrolled_courses')
           .eq('id', studentId)
           .single();
 
-        if (fetchError) throw fetchError;
+        if (fetchError) {
+          addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
+          failCount++;
+          continue;
+        }
 
         const currentCourses = studentData?.enrolled_courses || [];
-        if (currentCourses.includes(selectedCourse)) continue;
+        addDebug(`📋 Current courses for ${studentData.full_name}: ${currentCourses.length} courses`);
 
+        // Step 2: Check if already enrolled
+        if (currentCourses.includes(selectedCourse)) {
+          addDebug(`⚠️ ${studentData.full_name} already enrolled in this course`);
+          alreadyEnrolledCount++;
+          continue;
+        }
+
+        // Step 3: Add new course
         const updatedCourses = [...currentCourses, selectedCourse];
+        addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
 
+        // Step 4: Update database
         const { error: updateError } = await supabase
           .from('users')
-          .update({
-            enrolled_courses: updatedCourses
+          .update({ 
+            enrolled_courses: updatedCourses 
           })
           .eq('id', studentId);
 
-        if (updateError) throw updateError;
-        successCount++;
+        if (updateError) {
+          addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
+          failCount++;
+          continue;
+        }
+
+        // Step 5: VERIFY the update worked
+        const { data: verifyData, error: verifyError } = await supabase
+          .from('users')
+          .select('enrolled_courses')
+          .eq('id', studentId)
+          .single();
+
+        if (verifyError) {
+          addDebug(`⚠️ Verification failed: ${verifyError.message}`, true);
+          failCount++;
+        } else {
+          const verifiedCourses = verifyData?.enrolled_courses || [];
+          if (verifiedCourses.includes(selectedCourse)) {
+            addDebug(`✅ VERIFIED: ${studentData.full_name} successfully enrolled!`);
+            successCount++;
+          } else {
+            addDebug(`❌ VERIFICATION FAILED: ${studentData.full_name} not enrolled!`, true);
+            failCount++;
+          }
+        }
       }
 
-      setEnrollMessage(`✅ ${successCount} student(s) enrolled successfully!`);
+      // Show summary message
+      let summaryMessage = '';
+      if (successCount > 0) summaryMessage += `✅ ${successCount} student(s) enrolled successfully! `;
+      if (alreadyEnrolledCount > 0) summaryMessage += `⚠️ ${alreadyEnrolledCount} student(s) already enrolled. `;
+      if (failCount > 0) summaryMessage += `❌ ${failCount} student(s) failed to enroll.`;
+      
+      if (successCount === 0 && failCount === 0 && alreadyEnrolledCount > 0) {
+        summaryMessage = `⚠️ All ${alreadyEnrolledCount} student(s) were already enrolled.`;
+      } else if (successCount === 0 && failCount > 0) {
+        summaryMessage = `❌ All ${failCount} student(s) failed to enroll. Please check logs.`;
+      }
+      
+      setEnrollMessage(summaryMessage);
+      addDebug(`📊 Summary: ${summaryMessage}`);
+      
+      // Refresh data to show updated enrollment counts
       await fetchAllData();
       
+      // Clear selections after delay
       setTimeout(() => {
         setShowEnrollModal(false);
         setEnrollMessage('');
         setSelectedStudents([]);
         setSelectedCourse(null);
         setEnrollLoading(false);
-      }, 1500);
+      }, 2000);
 
     } catch (error) {
+      addDebug(`❌ Enrollment error: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
       setEnrollLoading(false);
     }
@@ -604,7 +659,6 @@ const AdminDashboard = () => {
                 </Col>
               </Row>
 
-              {/* Course Stats Display */}
               {selectedCourseStats ? (
                 <div className="mt-3">
                   <Row>
@@ -985,7 +1039,6 @@ const AdminDashboard = () => {
               </Alert>
             )}
             <Form>
-              {/* Course Search */}
               <Form.Group className="mb-3">
                 <Form.Label>Select Course</Form.Label>
                 <Form.Control
@@ -1013,7 +1066,6 @@ const AdminDashboard = () => {
               {selectedCourse && (
                 <>
                   <Form.Label>Select Students to Enroll</Form.Label>
-                  {/* Student Search */}
                   <Form.Control
                     type="text"
                     placeholder="Search students by name, matric number, or email..."
