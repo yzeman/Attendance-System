@@ -11,8 +11,14 @@ const Register = () => {
     password: '',
     confirmPassword: '',
     matricNo: '',
-    phone: ''
+    phone: '',
+    gender: '',
+    level: '',
+    department: ''
   });
+  const [departments, setDepartments] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showDepartmentDropdown, setShowDepartmentDropdown] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -21,61 +27,53 @@ const Register = () => {
   const [modelsReady, setModelsReady] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
-  const [debugMessage, setDebugMessage] = useState('⏳ Initializing...');
-  const [debugDetails, setDebugDetails] = useState([]);
   const videoRef = useRef(null);
   const navigate = useNavigate();
 
-  const addDebugLog = (message, data = null) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = { timestamp, message, data: data ? JSON.stringify(data, null, 2) : null };
-    setDebugDetails(prev => [...prev, logEntry]);
-    setDebugMessage(message);
-    console.log(`[${timestamp}] ${message}`, data || '');
+  // Fetch departments on mount
+  useEffect(() => {
+    fetchDepartments();
+  }, []);
+
+  const fetchDepartments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('departments')
+        .select('*')
+        .order('name');
+
+      if (error) throw error;
+      setDepartments(data || []);
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+    }
   };
 
   useEffect(() => {
     const init = async () => {
-      addDebugLog('🔵 Register page mounted - starting...');
-      
-      // 1. Start webcam first
-      addDebugLog('📷 Starting webcam...');
+      // Start webcam
       await startWebcam();
       
-      // 2. Load models with retry
+      // Load models
       setModelsLoading(true);
-      addDebugLog('🔄 Loading face models...');
-      
       let loaded = false;
       let attempts = 0;
       const maxAttempts = 3;
       
       while (!loaded && attempts < maxAttempts) {
         attempts++;
-        addDebugLog(`🔄 Loading attempt ${attempts} of ${maxAttempts}...`);
         try {
           loaded = await loadModels();
-          addDebugLog(`📥 Models loaded result: ${loaded}`);
         } catch (err) {
-          addDebugLog(`❌ Attempt ${attempts} error: ${err.message}`);
           loaded = false;
         }
-        
         if (!loaded && attempts < maxAttempts) {
-          addDebugLog(`⏳ Waiting 2 seconds before retry...`);
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
       
       setModelsReady(loaded);
       setModelsLoading(false);
-      
-      if (loaded) {
-        addDebugLog('✅ Models are ready! You can now capture faces.');
-      } else {
-        addDebugLog('❌ Models failed to load. Please refresh the page.');
-        setError('Face models failed to load. Please refresh the page and try again.');
-      }
     };
     
     init();
@@ -95,10 +93,9 @@ const Register = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setWebcamStarted(true);
-        addDebugLog('✅ Webcam started!');
       }
     } catch (err) {
-      addDebugLog('❌ Webcam error: ' + err.message);
+      console.error('Webcam error:', err);
       setError('Unable to access webcam. Please allow camera permissions.');
     }
   };
@@ -115,35 +112,44 @@ const Register = () => {
     }
 
     setCapturing(true);
-    addDebugLog('📸 Capturing face...');
     try {
       const descriptor = await getFaceDescriptor(videoRef.current);
       if (descriptor) {
         setFaceDescriptors(prev => [...prev, descriptor]);
-        addDebugLog(`✅ Captured ${faceDescriptors.length + 1} samples`);
         setSuccess(`✅ Face captured! (${faceDescriptors.length + 1}/3 samples)`);
         setError('');
       } else {
-        addDebugLog('❌ No face detected. Please look straight at the camera.');
         setError('❌ No face detected. Please look straight at the camera.');
       }
     } catch (err) {
-      addDebugLog('❌ Error: ' + err.message);
       setError('Error capturing face: ' + err.message);
     }
     setCapturing(false);
   };
 
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+    if (name === 'department') {
+      setShowDepartmentDropdown(false);
+    }
   };
+
+  const handleDepartmentSelect = (dept) => {
+    setFormData({ ...formData, department: dept });
+    setSearchTerm(dept);
+    setShowDepartmentDropdown(false);
+  };
+
+  const filteredDepartments = departments.filter(dept =>
+    dept.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
     setLoading(true);
-    addDebugLog('📝 Submitting registration...');
 
     // Validate passwords match
     if (formData.password !== formData.confirmPassword) {
@@ -159,9 +165,25 @@ const Register = () => {
       return;
     }
 
+    // Validate required fields
+    if (!formData.gender) {
+      setError('Please select your gender.');
+      setLoading(false);
+      return;
+    }
+    if (!formData.level) {
+      setError('Please select your level.');
+      setLoading(false);
+      return;
+    }
+    if (!formData.department) {
+      setError('Please select your department.');
+      setLoading(false);
+      return;
+    }
+
     try {
       // Step 1: Sign up with Supabase Auth
-      addDebugLog('🔐 Step 1: Creating auth account...', { email: formData.email });
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -173,47 +195,32 @@ const Register = () => {
         }
       });
 
-      if (authError) {
-        addDebugLog('❌ Auth error: ' + authError.message);
-        throw authError;
-      }
-
-      addDebugLog('✅ Auth account created! User ID: ' + authData.user.id);
+      if (authError) throw authError;
 
       if (!authData.user) {
         throw new Error('Registration failed. Please try again.');
       }
 
-      // Step 2: Insert into users table
-      addDebugLog('💾 Step 2: Inserting into users table...');
-
+      // Step 2: Insert into users table with all fields
       const insertData = {
         id: authData.user.id,
         full_name: formData.fullName,
         matric_no: formData.matricNo,
         phone: formData.phone,
         email: formData.email,
+        gender: formData.gender,
+        level: formData.level,
+        department: formData.department,
         face_descriptors: faceDescriptors,
-        role: 'student'
+        role: 'student',
+        profile_completed: true // All fields are filled during registration
       };
-
-      addDebugLog('📤 Insert data:', insertData);
 
       const { error: insertError } = await supabase
         .from('users')
         .insert(insertData);
 
-      if (insertError) {
-        addDebugLog('❌ Insert error:', {
-          message: insertError.message,
-          code: insertError.code,
-          details: insertError.details,
-          hint: insertError.hint
-        });
-        throw insertError;
-      }
-
-      addDebugLog('✅ User profile inserted successfully!');
+      if (insertError) throw insertError;
 
       setSuccess('✅ Registration successful! You can now login.');
       setFormData({
@@ -222,22 +229,19 @@ const Register = () => {
         password: '',
         confirmPassword: '',
         matricNo: '',
-        phone: ''
+        phone: '',
+        gender: '',
+        level: '',
+        department: ''
       });
       setFaceDescriptors([]);
+      setSearchTerm('');
 
-      // Redirect to login after 3 seconds
       setTimeout(() => {
         navigate('/login');
       }, 3000);
 
     } catch (err) {
-      addDebugLog('❌ Registration error: ' + err.message, {
-        name: err.name,
-        code: err.code,
-        details: err.details,
-        hint: err.hint
-      });
       setError(err.message || 'Registration failed. Please try again.');
     }
     setLoading(false);
@@ -245,7 +249,6 @@ const Register = () => {
 
   const handleResetFace = () => {
     setFaceDescriptors([]);
-    addDebugLog('🔄 Face samples reset');
     setSuccess('Face samples reset. Please capture new samples.');
   };
 
@@ -259,27 +262,6 @@ const Register = () => {
               <p className="text-muted">Create your account with face enrolment</p>
             </div>
 
-            {/* Debug Status */}
-            <Alert variant="info" className="mb-3">
-              <strong>🔍 Status:</strong> {debugMessage}
-            </Alert>
-
-            {/* Debug Log */}
-            <div className="mb-3" style={{ maxHeight: '150px', overflowY: 'auto', background: '#f8f9fa', borderRadius: '5px', padding: '10px', fontSize: '12px', fontFamily: 'monospace' }}>
-              <strong>📋 Debug Log:</strong>
-              {debugDetails.slice(-10).map((log, index) => (
-                <div key={index} style={{ borderBottom: '1px solid #eee', padding: '2px 0' }}>
-                  <span style={{ color: '#666' }}>[{log.timestamp}]</span> {log.message}
-                  {log.data && (
-                    <details>
-                      <summary style={{ cursor: 'pointer', color: '#007bff' }}>📄 Show data</summary>
-                      <pre style={{ fontSize: '10px', margin: '5px 0', padding: '5px', background: '#fff', borderRadius: '3px', overflow: 'auto', maxHeight: '100px' }}>{log.data}</pre>
-                    </details>
-                  )}
-                </div>
-              ))}
-            </div>
-
             {error && <Alert variant="danger">{error}</Alert>}
             {success && <Alert variant="success">{success}</Alert>}
 
@@ -287,7 +269,7 @@ const Register = () => {
               <Row>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Full Name</Form.Label>
+                    <Form.Label>Full Name <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="text"
                       name="fullName"
@@ -300,7 +282,7 @@ const Register = () => {
                 </Col>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Matric Number</Form.Label>
+                    <Form.Label>Matric Number <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="text"
                       name="matricNo"
@@ -316,7 +298,7 @@ const Register = () => {
               <Row>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Email Address</Form.Label>
+                    <Form.Label>Email Address <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="email"
                       name="email"
@@ -329,7 +311,7 @@ const Register = () => {
                 </Col>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Phone Number</Form.Label>
+                    <Form.Label>Phone Number <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="tel"
                       name="phone"
@@ -345,7 +327,7 @@ const Register = () => {
               <Row>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Password</Form.Label>
+                    <Form.Label>Password <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="password"
                       name="password"
@@ -359,7 +341,7 @@ const Register = () => {
                 </Col>
                 <Col md={6}>
                   <Form.Group className="mb-3">
-                    <Form.Label>Confirm Password</Form.Label>
+                    <Form.Label>Confirm Password <span className="text-danger">*</span></Form.Label>
                     <Form.Control
                       type="password"
                       name="confirmPassword"
@@ -368,6 +350,96 @@ const Register = () => {
                       onChange={handleChange}
                       required
                     />
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <hr className="my-4" />
+
+              <h5 className="mb-3">Additional Information</h5>
+
+              <Row>
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Gender <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      name="gender"
+                      value={formData.gender}
+                      onChange={handleChange}
+                      required
+                    >
+                      <option value="">Select Gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+
+                <Col md={6}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Level <span className="text-danger">*</span></Form.Label>
+                    <Form.Select
+                      name="level"
+                      value={formData.level}
+                      onChange={handleChange}
+                      required
+                    >
+                      <option value="">Select Level</option>
+                      <option value="ND1">ND1</option>
+                      <option value="ND2">ND2</option>
+                      <option value="HND1">HND1</option>
+                      <option value="HND2">HND2</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+              </Row>
+
+              <Row>
+                <Col md={12}>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Department <span className="text-danger">*</span></Form.Label>
+                    <div style={{ position: 'relative' }}>
+                      <Form.Control
+                        type="text"
+                        name="department"
+                        placeholder="Search for your department..."
+                        value={formData.department || searchTerm}
+                        onChange={(e) => {
+                          setSearchTerm(e.target.value);
+                          setShowDepartmentDropdown(true);
+                          if (e.target.value === '') {
+                            setFormData({ ...formData, department: '' });
+                          }
+                        }}
+                        onFocus={() => setShowDepartmentDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowDepartmentDropdown(false), 200)}
+                        required
+                      />
+                      {showDepartmentDropdown && searchTerm && (
+                        <div className="dropdown-menu show w-100" style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                          {filteredDepartments.length > 0 ? (
+                            filteredDepartments.map((dept) => (
+                              <button
+                                key={dept.id}
+                                className="dropdown-item"
+                                type="button"
+                                onClick={() => handleDepartmentSelect(dept.name)}
+                              >
+                                {dept.name}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="dropdown-item text-muted">
+                              {searchTerm ? `No department found matching "${searchTerm}"` : 'Type to search...'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <Form.Text className="text-muted">
+                      Start typing to search for your department. If not found, contact admin.
+                    </Form.Text>
                   </Form.Group>
                 </Col>
               </Row>
