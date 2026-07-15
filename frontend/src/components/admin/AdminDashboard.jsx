@@ -10,6 +10,7 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [students, setStudents] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [filteredLogs, setFilteredLogs] = useState([]);
   const [stats, setStats] = useState({
@@ -68,6 +69,12 @@ const AdminDashboard = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState('');
 
+  // Department Modal states
+  const [showDepartmentModal, setShowDepartmentModal] = useState(false);
+  const [newDepartment, setNewDepartment] = useState('');
+  const [departmentLoading, setDepartmentLoading] = useState(false);
+  const [departmentMessage, setDepartmentMessage] = useState('');
+
   // Enroll Modal states
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -121,7 +128,76 @@ const AdminDashboard = () => {
   // Load all data on mount
   useEffect(() => {
     fetchAllData();
+    fetchDepartments();
   }, []);
+
+  // Fetch departments
+  const fetchDepartments = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('departments')
+        .select('*')
+        .order('name');
+
+      if (error) throw error;
+      setDepartments(data || []);
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+      addDebug(`❌ Departments fetch error: ${error.message}`, true);
+    }
+  };
+
+  // Handle add department
+  const handleAddDepartment = async () => {
+    if (!newDepartment.trim()) {
+      setDepartmentMessage('❌ Please enter a department name.');
+      return;
+    }
+
+    setDepartmentLoading(true);
+    setDepartmentMessage('');
+
+    try {
+      const { error } = await supabase
+        .from('departments')
+        .insert({ name: newDepartment.trim() });
+
+      if (error) throw error;
+
+      setDepartmentMessage('✅ Department added successfully!');
+      setNewDepartment('');
+      await fetchDepartments();
+
+      setTimeout(() => {
+        setShowDepartmentModal(false);
+        setDepartmentMessage('');
+        setDepartmentLoading(false);
+      }, 1500);
+
+    } catch (error) {
+      setDepartmentMessage('❌ ' + error.message);
+      setDepartmentLoading(false);
+    }
+  };
+
+  // Handle delete department
+  const handleDeleteDepartment = async (departmentId) => {
+    if (!window.confirm('⚠️ Are you sure you want to delete this department?')) return;
+
+    try {
+      const { error } = await supabase
+        .from('departments')
+        .delete()
+        .eq('id', departmentId);
+
+      if (error) throw error;
+      await fetchDepartments();
+      addDebug(`✅ Department deleted successfully`);
+    } catch (error) {
+      addDebug(`❌ Delete department error: ${error.message}`, true);
+      alert('❌ Error deleting department: ' + error.message);
+    }
+  };
 
   // Fetch all data
   const fetchAllData = async () => {
@@ -134,7 +210,7 @@ const AdminDashboard = () => {
       // Fetch students
       const { data: studentsData, error: studentsError } = await supabase
         .from('users')
-        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role')
+        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role, gender, level, department')
         .eq('role', 'student')
         .order('full_name');
 
@@ -393,7 +469,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ EDIT COURSE FUNCTION
+  // Edit Course Function
   const handleEditCourse = async () => {
     if (!editingCourse) return;
     
@@ -434,7 +510,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ FIXED: Delete Course - COMPLETELY removes course
+  // Delete Course Function
   const handleDeleteCourse = async () => {
     if (!deletingCourse) return;
     
@@ -479,7 +555,6 @@ const AdminDashboard = () => {
       if (attError) {
         console.error('Error deleting attendance:', attError);
         addDebug(`⚠️ Attendance deletion warning: ${attError.message}`, true);
-        // Continue anyway - we still want to delete the course
       } else {
         addDebug(`✅ Deleted attendance records for course`);
       }
@@ -497,7 +572,6 @@ const AdminDashboard = () => {
       setDeleteMessage('✅ Course and all associated data deleted successfully!');
       addDebug(`✅ Course PERMANENTLY deleted: ${deletingCourse.course_code}`);
       
-      // Refresh all data
       await fetchAllData();
 
       setTimeout(() => {
@@ -1119,6 +1193,9 @@ const AdminDashboard = () => {
                       <th>Matric No</th>
                       <th>Email</th>
                       <th>Phone</th>
+                      <th>Gender</th>
+                      <th>Level</th>
+                      <th>Department</th>
                       <th>Enrolled Courses</th>
                       <th>Registered</th>
                     </tr>
@@ -1126,7 +1203,7 @@ const AdminDashboard = () => {
                   <tbody>
                     {students.length === 0 ? (
                       <tr>
-                        <td colSpan="6" className="text-center text-muted">
+                        <td colSpan="9" className="text-center text-muted">
                           No students registered.
                         </td>
                       </tr>
@@ -1137,12 +1214,63 @@ const AdminDashboard = () => {
                           <td>{student.matric_no}</td>
                           <td>{student.email}</td>
                           <td>{student.phone || 'N/A'}</td>
+                          <td>{student.gender || 'N/A'}</td>
+                          <td>{student.level || 'N/A'}</td>
+                          <td>{student.department || 'N/A'}</td>
                           <td>
                             <Badge bg="info">
                               {student.enrolled_courses?.length || 0}
                             </Badge>
                           </td>
                           <td>{new Date(student.created_at).toLocaleDateString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+            </Card>
+          </Tab>
+
+          {/* Departments Tab */}
+          <Tab eventKey="departments" title="🏛️ Departments">
+            <Card className="p-3 shadow">
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h5>Manage Departments</h5>
+                <Button variant="primary" onClick={() => setShowDepartmentModal(true)}>
+                  ➕ Add Department
+                </Button>
+              </div>
+              <div className="table-container">
+                <Table striped bordered hover responsive>
+                  <thead>
+                    <tr>
+                      <th>Department Name</th>
+                      <th>Created At</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {departments.length === 0 ? (
+                      <tr>
+                        <td colSpan="3" className="text-center text-muted">
+                          No departments found.
+                        </td>
+                      </tr>
+                    ) : (
+                      departments.map((dept) => (
+                        <tr key={dept.id}>
+                          <td><strong>{dept.name}</strong></td>
+                          <td>{new Date(dept.created_at).toLocaleDateString()}</td>
+                          <td>
+                            <Button 
+                              variant="danger" 
+                              size="sm"
+                              onClick={() => handleDeleteDepartment(dept.id)}
+                            >
+                              🗑️ Delete
+                            </Button>
+                          </td>
                         </tr>
                       ))
                     )}
@@ -1297,6 +1425,52 @@ const AdminDashboard = () => {
             </Button>
             <Button variant="danger" onClick={handleDeleteCourse} disabled={deleteLoading}>
               {deleteLoading ? <Spinner size="sm" /> : '🗑️ Delete Permanently'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Add Department Modal */}
+        <Modal show={showDepartmentModal} onHide={() => {
+          setShowDepartmentModal(false);
+          setDepartmentMessage('');
+          setNewDepartment('');
+        }}>
+          <Modal.Header closeButton>
+            <Modal.Title>🏛️ Add New Department</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {departmentMessage && (
+              <Alert variant={departmentMessage.startsWith('✅') ? 'success' : 'danger'}>
+                {departmentMessage}
+              </Alert>
+            )}
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Department Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., Software Engineering"
+                  value={newDepartment}
+                  onChange={(e) => setNewDepartment(e.target.value)}
+                  disabled={departmentLoading}
+                  required
+                />
+                <Form.Text className="text-muted">
+                  Students will be able to select this department in their profile.
+                </Form.Text>
+              </Form.Group>
+            </Form>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => {
+              setShowDepartmentModal(false);
+              setDepartmentMessage('');
+              setNewDepartment('');
+            }} disabled={departmentLoading}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={handleAddDepartment} disabled={departmentLoading}>
+              {departmentLoading ? <Spinner size="sm" /> : '✅ Add Department'}
             </Button>
           </Modal.Footer>
         </Modal>
