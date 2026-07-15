@@ -27,8 +27,7 @@ const AdminDashboard = () => {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
   
-  // Semester toggle
-  const [selectedSemester, setSelectedSemester] = useState('First');
+  // Semester toggle - only this, no dropdown
   const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(true);
   
   // Course attendance list modal
@@ -50,11 +49,6 @@ const AdminDashboard = () => {
     studentId: '',
     department: '',
     level: '',
-    semester: '',
-    month: '',
-    week: '',
-    startDate: '',
-    endDate: '',
     searchQuery: ''
   });
 
@@ -316,25 +310,6 @@ const AdminDashboard = () => {
       if (filterObj.studentId) query = query.eq('student_id', filterObj.studentId);
       if (filterObj.department) query = query.eq('course.department', filterObj.department);
       if (filterObj.level) query = query.eq('course.level', filterObj.level);
-      if (filterObj.semester) query = query.eq('course.semester', filterObj.semester);
-      if (filterObj.month) {
-        const start = new Date(filterObj.month + '-01');
-        const end = new Date(filterObj.month + '-01');
-        end.setMonth(end.getMonth() + 1);
-        query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
-      }
-      if (filterObj.week) {
-        const [year, weekNum] = filterObj.week.split('-').map(Number);
-        const start = getStartOfWeek(year, weekNum);
-        const end = new Date(start);
-        end.setDate(end.getDate() + 6);
-        query = query.gte('date', start.toISOString()).lt('date', end.toISOString());
-      }
-      if (filterObj.startDate && filterObj.endDate) {
-        query = query
-          .gte('date', new Date(filterObj.startDate).toISOString())
-          .lte('date', new Date(filterObj.endDate).toISOString());
-      }
 
       const { data, error } = await query;
       if (error) throw error;
@@ -435,22 +410,20 @@ const AdminDashboard = () => {
   const handleFilterChange = (e) => {
     const { name, value } = e.target;
     setFilters({ ...filters, [name]: value });
+    
+    // Auto-filter courses when department or level changes
+    if (name === 'department' || name === 'level') {
+      applyFilters();
+    }
   };
 
-  // Apply filters with search
+  // Apply filters with search - get distinct students with attendance
   const applyFilters = async () => {
     const activeFilters = {};
     if (filters.courseId) activeFilters.courseId = filters.courseId;
     if (filters.studentId) activeFilters.studentId = filters.studentId;
     if (filters.department) activeFilters.department = filters.department;
     if (filters.level) activeFilters.level = filters.level;
-    if (filters.semester) activeFilters.semester = filters.semester;
-    if (filters.month) activeFilters.month = filters.month;
-    if (filters.week) activeFilters.week = filters.week;
-    if (filters.startDate && filters.endDate) {
-      activeFilters.startDate = filters.startDate;
-      activeFilters.endDate = filters.endDate;
-    }
 
     let logs = await fetchAttendanceLogs(activeFilters);
     
@@ -472,12 +445,10 @@ const AdminDashboard = () => {
         groupedLogs[key] = {
           student: log.student,
           course: log.course,
-          count: 0,
-          dates: []
+          count: 0
         };
       }
       groupedLogs[key].count++;
-      groupedLogs[key].dates.push(new Date(log.date).toLocaleDateString());
     });
     
     setFilteredLogs(Object.values(groupedLogs));
@@ -490,11 +461,6 @@ const AdminDashboard = () => {
       studentId: '',
       department: '',
       level: '',
-      semester: '',
-      month: '',
-      week: '',
-      startDate: '',
-      endDate: '',
       searchQuery: ''
     });
     const logs = await fetchAttendanceLogs({});
@@ -505,12 +471,10 @@ const AdminDashboard = () => {
         groupedLogs[key] = {
           student: log.student,
           course: log.course,
-          count: 0,
-          dates: []
+          count: 0
         };
       }
       groupedLogs[key].count++;
-      groupedLogs[key].dates.push(new Date(log.date).toLocaleDateString());
     });
     setFilteredLogs(Object.values(groupedLogs));
   };
@@ -928,13 +892,12 @@ const AdminDashboard = () => {
       return;
     }
 
-    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Date', 'Status'];
+    const headers = ['Student Name', 'Matric No', 'Course Code', 'Course Name', 'Status'];
     const rows = todayAttendanceData.map(record => [
       record.student?.full_name || 'N/A',
       record.student?.matric_no || 'N/A',
       record.course?.course_code || 'N/A',
       record.course?.course_name || 'N/A',
-      new Date(record.date).toLocaleString(),
       record.status || 'present'
     ]);
 
@@ -1001,6 +964,18 @@ const AdminDashboard = () => {
     window.URL.revokeObjectURL(url);
   };
 
+  // Get filtered courses based on department and level
+  const getFilteredCoursesForDropdown = () => {
+    let filtered = courses;
+    if (filters.department) {
+      filtered = filtered.filter(c => c.department === filters.department);
+    }
+    if (filters.level) {
+      filtered = filtered.filter(c => c.level === filters.level);
+    }
+    return filtered;
+  };
+
   // Filter courses for search
   const filteredCourses = courses.filter(c => 
     c.course_code.toLowerCase().includes(courseSearch.toLowerCase()) ||
@@ -1020,6 +995,9 @@ const AdminDashboard = () => {
     s.email.toLowerCase().includes(studentSearchEnroll.toLowerCase())
   );
 
+  // Get filtered courses for the dropdown in attendance logs
+  const courseDropdownOptions = getFilteredCoursesForDropdown();
+
   if (loading) {
     return (
       <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
@@ -1038,35 +1016,27 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Semester Toggle */}
+        {/* Semester Toggle - Only toggle, no dropdown */}
         <Card className="mb-4 p-3 shadow-sm" style={{ borderRadius: '12px', background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)' }}>
           <Row className="align-items-center">
             <Col md={6}>
               <h6 className="mb-0">📅 Semester View</h6>
             </Col>
             <Col md={6}>
-              <div className="d-flex gap-3 justify-content-end align-items-center">
+              <div className="d-flex justify-content-end align-items-center">
                 <Form.Check
                   type="switch"
                   id="semester-switch"
-                  label="Second Semester"
+                  label={secondSemesterEnabled ? 'Second Semester ON' : 'Second Semester OFF'}
                   checked={secondSemesterEnabled}
                   onChange={(e) => setSecondSemesterEnabled(e.target.checked)}
                 />
-                <Form.Select
-                  value={selectedSemester}
-                  onChange={(e) => setSelectedSemester(e.target.value)}
-                  style={{ width: 'auto', borderRadius: '8px' }}
-                >
-                  <option value="First">First Semester</option>
-                  <option value="Second">Second Semester</option>
-                </Form.Select>
               </div>
             </Col>
           </Row>
         </Card>
 
-        {/* Stats Cards - Improved UI */}
+        {/* Stats Cards */}
         <Row className="mb-4 g-3">
           <Col md={2} sm={4} xs={6}>
             <Card className="text-center p-3 shadow-sm" style={{ borderRadius: '15px', border: 'none', background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
@@ -1232,7 +1202,7 @@ const AdminDashboard = () => {
                       <Form.Control
                         type="text"
                         name="searchQuery"
-                        placeholder="Search by student name, matric number, or course code..."
+                        placeholder="Search by student name or matric number..."
                         value={filters.searchQuery}
                         onChange={handleFilterChange}
                       />
@@ -1271,20 +1241,6 @@ const AdminDashboard = () => {
                   </Col>
                   <Col md={3}>
                     <Form.Group>
-                      <Form.Label>Semester</Form.Label>
-                      <Form.Select
-                        name="semester"
-                        value={filters.semester}
-                        onChange={handleFilterChange}
-                      >
-                        <option value="">All Semesters</option>
-                        <option value="First">First Semester</option>
-                        <option value="Second">Second Semester</option>
-                      </Form.Select>
-                    </Form.Group>
-                  </Col>
-                  <Col md={3}>
-                    <Form.Group>
                       <Form.Label>Course</Form.Label>
                       <Form.Select
                         name="courseId"
@@ -1292,7 +1248,7 @@ const AdminDashboard = () => {
                         onChange={handleFilterChange}
                       >
                         <option value="">All Courses</option>
-                        {courses.map(c => (
+                        {courseDropdownOptions.map(c => (
                           <option key={c.id} value={c.id}>
                             {c.course_code} - {c.course_name}
                           </option>
@@ -1317,65 +1273,18 @@ const AdminDashboard = () => {
                       </Form.Select>
                     </Form.Group>
                   </Col>
-                  <Col md={3}>
-                    <Form.Group>
-                      <Form.Label>Month</Form.Label>
-                      <Form.Control
-                        type="month"
-                        name="month"
-                        value={filters.month}
-                        onChange={handleFilterChange}
-                      />
-                    </Form.Group>
-                  </Col>
-                  <Col md={3}>
-                    <Form.Group>
-                      <Form.Label>Week (YYYY-WW)</Form.Label>
-                      <Form.Control
-                        type="text"
-                        name="week"
-                        placeholder="2025-12"
-                        value={filters.week}
-                        onChange={handleFilterChange}
-                      />
-                    </Form.Group>
-                  </Col>
                   <Col md={12} className="mt-2">
-                    <Row>
-                      <Col md={3}>
-                        <Form.Group>
-                          <Form.Label>Start Date</Form.Label>
-                          <Form.Control
-                            type="date"
-                            name="startDate"
-                            value={filters.startDate}
-                            onChange={handleFilterChange}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col md={3}>
-                        <Form.Group>
-                          <Form.Label>End Date</Form.Label>
-                          <Form.Control
-                            type="date"
-                            name="endDate"
-                            value={filters.endDate}
-                            onChange={handleFilterChange}
-                          />
-                        </Form.Group>
-                      </Col>
-                      <Col md={6} className="d-flex align-items-end gap-2">
-                        <Button variant="primary" onClick={applyFilters}>
-                          Apply Filters
-                        </Button>
-                        <Button variant="secondary" onClick={resetFilters}>
-                          Reset
-                        </Button>
-                        <Button variant="success" onClick={exportCSV}>
-                          📥 Export Summary CSV
-                        </Button>
-                      </Col>
-                    </Row>
+                    <div className="d-flex gap-2">
+                      <Button variant="primary" onClick={applyFilters}>
+                        Apply Filters
+                      </Button>
+                      <Button variant="secondary" onClick={resetFilters}>
+                        Reset
+                      </Button>
+                      <Button variant="success" onClick={exportCSV}>
+                        📥 Export Summary CSV
+                      </Button>
+                    </div>
                   </Col>
                 </Row>
               </div>
@@ -1385,18 +1294,17 @@ const AdminDashboard = () => {
                 <Table striped bordered hover responsive>
                   <thead>
                     <tr>
-                      <th>Student</th>
+                      <th>Student Name</th>
                       <th>Matric No</th>
                       <th>Course</th>
                       <th>Attendance Count</th>
-                      <th>Dates</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredLogs.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="text-center text-muted">
-                          No attendance records found.
+                        <td colSpan="4" className="text-center text-muted">
+                          No students have marked attendance for the selected filters.
                         </td>
                       </tr>
                     ) : (
@@ -1407,9 +1315,6 @@ const AdminDashboard = () => {
                           <td>{log.course?.course_code || 'N/A'}</td>
                           <td>
                             <Badge bg="primary">{log.count || 0}</Badge>
-                          </td>
-                          <td>
-                            <small>{log.dates?.join(', ') || 'N/A'}</small>
                           </td>
                         </tr>
                       ))
@@ -1449,8 +1354,7 @@ const AdminDashboard = () => {
                 />
               </Form.Group>
 
-              {/* First Semester Courses */}
-              <h6 className="mt-3">📘 First Semester Courses</h6>
+              {/* All Courses - filtered by semester toggle */}
               <div className="table-container">
                 <Table striped bordered hover responsive>
                   <thead>
@@ -1460,6 +1364,7 @@ const AdminDashboard = () => {
                       <th>Lecturer</th>
                       <th>Department</th>
                       <th>Level</th>
+                      <th>Semester</th>
                       <th>Status</th>
                       <th>Attendance</th>
                       <th>Enrolled</th>
@@ -1467,14 +1372,14 @@ const AdminDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredCourses.filter(c => c.semester === 'First' && (secondSemesterEnabled ? true : c.semester === 'First')).length === 0 ? (
+                    {filteredCourses.filter(c => secondSemesterEnabled ? c.semester === 'Second' : c.semester === 'First').length === 0 ? (
                       <tr>
-                        <td colSpan="9" className="text-center text-muted">
-                          No First Semester courses found.
+                        <td colSpan="10" className="text-center text-muted">
+                          No courses found for the selected semester.
                         </td>
                       </tr>
                     ) : (
-                      filteredCourses.filter(c => c.semester === 'First' && (secondSemesterEnabled ? true : c.semester === 'First')).map((course) => {
+                      filteredCourses.filter(c => secondSemesterEnabled ? c.semester === 'Second' : c.semester === 'First').map((course) => {
                         const enrolledCount = students.filter(s => 
                           s.enrolled_courses?.includes(course.id)
                         ).length;
@@ -1485,6 +1390,7 @@ const AdminDashboard = () => {
                             <td>{course.lecturer || 'N/A'}</td>
                             <td>{course.department || 'N/A'}</td>
                             <td>{course.level || 'N/A'}</td>
+                            <td>{course.semester || 'N/A'}</td>
                             <td>
                               <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
                                 {course.is_active !== false ? 'Active' : 'Inactive'}
@@ -1536,98 +1442,6 @@ const AdminDashboard = () => {
                   </tbody>
                 </Table>
               </div>
-
-              {/* Second Semester Courses */}
-              {secondSemesterEnabled && (
-                <>
-                  <h6 className="mt-4">📗 Second Semester Courses</h6>
-                  <div className="table-container">
-                    <Table striped bordered hover responsive>
-                      <thead>
-                        <tr>
-                          <th>Course Code</th>
-                          <th>Course Name</th>
-                          <th>Lecturer</th>
-                          <th>Department</th>
-                          <th>Level</th>
-                          <th>Status</th>
-                          <th>Attendance</th>
-                          <th>Enrolled</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredCourses.filter(c => c.semester === 'Second' && (secondSemesterEnabled ? true : c.semester === 'First')).length === 0 ? (
-                          <tr>
-                            <td colSpan="9" className="text-center text-muted">
-                              No Second Semester courses found.
-                            </td>
-                          </tr>
-                        ) : (
-                          filteredCourses.filter(c => c.semester === 'Second' && (secondSemesterEnabled ? true : c.semester === 'First')).map((course) => {
-                            const enrolledCount = students.filter(s => 
-                              s.enrolled_courses?.includes(course.id)
-                            ).length;
-                            return (
-                              <tr key={course.id}>
-                                <td><strong>{course.course_code}</strong></td>
-                                <td>{course.course_name}</td>
-                                <td>{course.lecturer || 'N/A'}</td>
-                                <td>{course.department || 'N/A'}</td>
-                                <td>{course.level || 'N/A'}</td>
-                                <td>
-                                  <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
-                                    {course.is_active !== false ? 'Active' : 'Inactive'}
-                                  </Badge>
-                                </td>
-                                <td>
-                                  <Badge 
-                                    bg={course.attendance_enabled !== false ? 'success' : 'danger'}
-                                    style={{ cursor: 'pointer' }}
-                                    onClick={() => toggleCourseAttendance(course.id, course.attendance_enabled !== false)}
-                                  >
-                                    {course.attendance_enabled !== false ? 'ON' : 'OFF'}
-                                  </Badge>
-                                </td>
-                                <td>
-                                  <Badge bg="info">
-                                    {enrolledCount}
-                                  </Badge>
-                                </td>
-                                <td>
-                                  <Button 
-                                    variant="info" 
-                                    size="sm" 
-                                    className="me-1"
-                                    onClick={() => openCourseAttendanceModal(course)}
-                                  >
-                                    📊 View
-                                  </Button>
-                                  <Button 
-                                    variant="warning" 
-                                    size="sm" 
-                                    className="me-1"
-                                    onClick={() => openEditModal(course)}
-                                  >
-                                    ✏️ Edit
-                                  </Button>
-                                  <Button 
-                                    variant="danger" 
-                                    size="sm"
-                                    onClick={() => openDeleteModal(course)}
-                                  >
-                                    🗑️ Delete
-                                  </Button>
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </Table>
-                  </div>
-                </>
-              )}
             </Card>
           </Tab>
 
@@ -1809,14 +1623,13 @@ const AdminDashboard = () => {
                     <th>Student</th>
                     <th>Matric No</th>
                     <th>Course</th>
-                    <th>Date</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {todayAttendanceData.length === 0 ? (
                     <tr>
-                      <td colSpan="5" className="text-center text-muted">
+                      <td colSpan="4" className="text-center text-muted">
                         No attendance records for today.
                       </td>
                     </tr>
@@ -1826,7 +1639,6 @@ const AdminDashboard = () => {
                         <td>{record.student?.full_name || 'N/A'}</td>
                         <td>{record.student?.matric_no || 'N/A'}</td>
                         <td>{record.course?.course_code || 'N/A'}</td>
-                        <td>{new Date(record.date).toLocaleString()}</td>
                         <td>
                           <Badge bg={record.status === 'present' ? 'success' : 'danger'}>
                             {record.status === 'present' ? '✅ Present' : '❌ Absent'}
