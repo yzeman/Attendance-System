@@ -6,13 +6,14 @@ const StudentDashboard = () => {
   const [attendance, setAttendance] = useState([]);
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [debugMessages, setDebugMessages] = useState([]);
   const [stats, setStats] = useState({
     totalPresent: 0,
     totalCourses: 0,
     attendancePercentage: 0
   });
-  const user = JSON.parse(localStorage.getItem('user'));
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   const addDebug = (message, isError = false) => {
     const timestamp = new Date().toLocaleTimeString();
@@ -26,11 +27,21 @@ const StudentDashboard = () => {
 
   const fetchData = async () => {
     setLoading(true);
+    setError(null);
     setDebugMessages([]);
-    addDebug(`🔵 Student Dashboard: Fetching data for ${user?.email}`);
-    addDebug(`🔵 User ID: ${user?.id}`);
     
     try {
+      // Check if user exists
+      if (!user || !user.id) {
+        addDebug('❌ No user found in localStorage', true);
+        setError('Please login again.');
+        setLoading(false);
+        return;
+      }
+      
+      addDebug(`🔵 Student Dashboard: Fetching data for ${user?.email || 'Unknown'}`);
+      addDebug(`🔵 User ID: ${user?.id || 'Unknown'}`);
+      
       // 1. Fetch student's attendance records
       addDebug('🔵 Fetching attendance records...');
       const { data: attendanceData, error: attError } = await supabase
@@ -41,9 +52,9 @@ const StudentDashboard = () => {
 
       if (attError) {
         addDebug(`❌ Attendance fetch error: ${attError.message}`, true);
-      } else {
-        addDebug(`✅ Attendance fetched: ${attendanceData?.length || 0} records`);
+        throw attError;
       }
+      addDebug(`✅ Attendance fetched: ${attendanceData?.length || 0} records`);
       setAttendance(attendanceData || []);
 
       // 2. Fetch student's enrolled courses
@@ -56,13 +67,11 @@ const StudentDashboard = () => {
 
       if (userError) {
         addDebug(`❌ User fetch error: ${userError.message}`, true);
-      } else {
-        addDebug(`✅ User data fetched successfully`);
+        throw userError;
       }
 
       const enrolledIds = userData?.enrolled_courses || [];
       addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
-      addDebug(`📋 IDs: ${JSON.stringify(enrolledIds)}`);
 
       if (enrolledIds.length > 0) {
         addDebug('🔵 Fetching course details...');
@@ -73,11 +82,11 @@ const StudentDashboard = () => {
 
         if (courseError) {
           addDebug(`❌ Courses fetch error: ${courseError.message}`, true);
-        } else {
-          addDebug(`✅ Courses fetched: ${coursesData?.length || 0} course(s)`);
-          if (coursesData?.length > 0) {
-            addDebug(`📋 Courses: ${coursesData.map(c => c.course_code).join(', ')}`);
-          }
+          throw courseError;
+        }
+        addDebug(`✅ Courses fetched: ${coursesData?.length || 0} course(s)`);
+        if (coursesData?.length > 0) {
+          addDebug(`📋 Courses: ${coursesData.map(c => c.course_code).join(', ')}`);
         }
         setCourses(coursesData || []);
       } else {
@@ -97,9 +106,11 @@ const StudentDashboard = () => {
       });
 
       addDebug(`📊 Stats: ${presentCount} present, ${enrolledIds.length} courses, ${percentage}%`);
+      addDebug('✅ Data loaded successfully!');
 
     } catch (error) {
       addDebug(`❌ Error fetching data: ${error.message}`, true);
+      setError(error.message);
       console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
@@ -108,27 +119,54 @@ const StudentDashboard = () => {
 
   // Group attendance by course
   const getAttendanceByCourse = () => {
-    const courseMap = {};
-    attendance.forEach(record => {
-      const courseId = record.course_id;
-      if (!courseMap[courseId]) {
-        courseMap[courseId] = {
-          courseCode: record.course?.course_code || 'Unknown',
-          courseName: record.course?.course_name || 'Unknown',
-          present: 0,
-          total: 0
-        };
-      }
-      courseMap[courseId].total++;
-      if (record.status === 'present') {
-        courseMap[courseId].present++;
-      }
-    });
-    return Object.values(courseMap);
+    try {
+      const courseMap = {};
+      if (!attendance || attendance.length === 0) return [];
+      
+      attendance.forEach(record => {
+        if (!record) return;
+        const courseId = record.course_id;
+        if (!courseMap[courseId]) {
+          courseMap[courseId] = {
+            courseCode: record.course?.course_code || 'Unknown',
+            courseName: record.course?.course_name || 'Unknown',
+            present: 0,
+            total: 0
+          };
+        }
+        courseMap[courseId].total++;
+        if (record.status === 'present') {
+          courseMap[courseId].present++;
+        }
+      });
+      return Object.values(courseMap);
+    } catch (err) {
+      console.error('Error grouping attendance:', err);
+      return [];
+    }
   };
 
   const courseStats = getAttendanceByCourse();
 
+  // Show error state
+  if (error) {
+    return (
+      <Container className="mt-5">
+        <Alert variant="danger">
+          <h5>❌ Error Loading Dashboard</h5>
+          <p>{error}</p>
+          <Button variant="outline-danger" onClick={() => {
+            setError(null);
+            fetchData();
+          }}>
+            🔄 Try Again
+          </Button>
+        </Alert>
+      </Container>
+    );
+  }
+
+  // Show loading state
   if (loading) {
     return (
       <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
@@ -140,14 +178,14 @@ const StudentDashboard = () => {
   return (
     <Container className="mt-4">
       <div className="animate-fade-in">
-        <h2 className="mb-4">👋 Welcome, {user?.full_name}</h2>
+        <h2 className="mb-4">👋 Welcome, {user?.full_name || 'Student'}</h2>
 
         {/* Debug Panel */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
-          <h6 className="mb-2">🔍 Debug Log</h6>
+          <h6 className="mb-2">🔍 Debug Log ({debugMessages.length} messages)</h6>
           <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
             {debugMessages.length === 0 ? (
-              <div className="text-muted">Loading...</div>
+              <div className="text-muted">No logs yet...</div>
             ) : (
               debugMessages.map((msg, idx) => (
                 <div key={idx} style={{ 
@@ -177,19 +215,19 @@ const StudentDashboard = () => {
         <Row className="mb-4">
           <Col md={4}>
             <Card className="stat-card">
-              <h2>{stats.totalPresent}</h2>
+              <h2>{stats.totalPresent || 0}</h2>
               <p>Total Present Days</p>
             </Card>
           </Col>
           <Col md={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
-              <h2>{stats.totalCourses}</h2>
+              <h2>{stats.totalCourses || 0}</h2>
               <p>Enrolled Courses</p>
             </Card>
           </Col>
           <Col md={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
-              <h2>{stats.attendancePercentage}%</h2>
+              <h2>{stats.attendancePercentage || 0}%</h2>
               <p>Overall Attendance</p>
             </Card>
           </Col>
@@ -290,7 +328,7 @@ const StudentDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {attendance.length === 0 ? (
+                    {!attendance || attendance.length === 0 ? (
                       <tr>
                         <td colSpan="3" className="text-center text-muted">
                           No attendance records yet.
@@ -299,8 +337,8 @@ const StudentDashboard = () => {
                     ) : (
                       attendance.slice(0, 20).map((record) => (
                         <tr key={record.id}>
-                          <td>{new Date(record.date).toLocaleString()}</td>
-                          <td>{record.course?.course_code} - {record.course?.course_name}</td>
+                          <td>{record.date ? new Date(record.date).toLocaleString() : 'Unknown'}</td>
+                          <td>{record.course?.course_code || 'Unknown'} - {record.course?.course_name || 'Unknown'}</td>
                           <td>
                             <Badge bg="success" className="px-3 py-2">
                               ✅ Present
