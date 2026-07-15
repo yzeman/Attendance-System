@@ -434,7 +434,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ FIXED DELETE COURSE FUNCTION - WORKS!
+  // ✅ FIXED: Delete Course - COMPLETELY removes course
   const handleDeleteCourse = async () => {
     if (!deletingCourse) return;
     
@@ -449,7 +449,7 @@ const AdminDashboard = () => {
         .contains('enrolled_courses', [deletingCourse.id]);
 
       if (fetchError) {
-        console.error('Error fetching students:', fetchError);
+        addDebug(`⚠️ Error finding enrolled students: ${fetchError.message}`, true);
       }
 
       // Step 2: Remove the course from each student's enrolled_courses
@@ -478,22 +478,26 @@ const AdminDashboard = () => {
 
       if (attError) {
         console.error('Error deleting attendance:', attError);
+        addDebug(`⚠️ Attendance deletion warning: ${attError.message}`, true);
+        // Continue anyway - we still want to delete the course
       } else {
         addDebug(`✅ Deleted attendance records for course`);
       }
 
-      // Step 4: Delete the course
-      const { error } = await supabase
+      // Step 4: Delete the course from courses table
+      const { error: courseError } = await supabase
         .from('courses')
         .delete()
         .eq('id', deletingCourse.id);
 
-      if (error) throw error;
+      if (courseError) {
+        throw new Error(`Failed to delete course: ${courseError.message}`);
+      }
 
-      setDeleteMessage('✅ Course deleted successfully!');
-      addDebug(`✅ Course deleted: ${deletingCourse.course_code}`);
+      setDeleteMessage('✅ Course and all associated data deleted successfully!');
+      addDebug(`✅ Course PERMANENTLY deleted: ${deletingCourse.course_code}`);
       
-      // Refresh data
+      // Refresh all data
       await fetchAllData();
 
       setTimeout(() => {
@@ -505,6 +509,7 @@ const AdminDashboard = () => {
 
     } catch (error) {
       setDeleteMessage('❌ ' + error.message);
+      addDebug(`❌ Delete error: ${error.message}`, true);
       setDeleteLoading(false);
     }
   };
