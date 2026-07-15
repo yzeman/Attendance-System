@@ -6,6 +6,7 @@ const StudentDashboard = () => {
   const [attendance, setAttendance] = useState([]);
   const [courses, setCourses] = useState([]);
   const [todayCourses, setTodayCourses] = useState([]);
+  const [todayAbsent, setTodayAbsent] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCourse, setSelectedCourse] = useState('');
   const [stats, setStats] = useState({
@@ -98,6 +99,16 @@ const StudentDashboard = () => {
       }
       setTodayCourses(todayCoursesData);
 
+      // 6. Get today's absent courses
+      const allCourseIds = coursesData?.map(c => c.id) || [];
+      const absentCourseIds = allCourseIds.filter(id => !todayCourseIds.includes(id));
+      const absentCourses = (coursesData || []).filter(c => 
+        absentCourseIds.includes(c.id) && 
+        c.is_active !== false && 
+        c.attendance_enabled !== false
+      );
+      setTodayAbsent(absentCourses);
+
       setStats({
         totalPresent: presentCount,
         totalCourses: enrolledIds.length,
@@ -184,11 +195,11 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* Today's Courses Section - FIXED STYLING */}
-        <Row className="mb-4">
+        {/* Today's Attended Courses */}
+        <Row className="mb-3">
           <Col md={12}>
             <Card className="p-3">
-              <h5 className="mb-3">📅 Today's Attended Courses</h5>
+              <h5 className="mb-3">✅ Today's Attended Courses</h5>
               {todayCourses.length === 0 ? (
                 <Alert variant="info">
                   You haven't attended any courses today.
@@ -211,6 +222,43 @@ const StudentDashboard = () => {
                     </Badge>
                   ))}
                 </div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Today's Absent Courses */}
+        <Row className="mb-3">
+          <Col md={12}>
+            <Card className="p-3" style={{ background: '#fff5f5', border: '1px solid #dc3545' }}>
+              <h5 className="mb-3" style={{ color: '#dc3545' }}>❌ Today's Absent Courses</h5>
+              {todayAbsent.length === 0 ? (
+                <Alert variant="success" style={{ background: '#d4edda', borderColor: '#28a745' }}>
+                  🎉 You have marked all your active courses today! Great job!
+                </Alert>
+              ) : (
+                <>
+                  <div className="d-flex flex-wrap gap-2" style={{ maxWidth: '100%' }}>
+                    {todayAbsent.map((course) => (
+                      <Badge 
+                        key={course.id} 
+                        bg="danger" 
+                        className="p-2"
+                        style={{ 
+                          fontSize: '0.9rem', 
+                          maxWidth: '100%',
+                          whiteSpace: 'normal',
+                          wordBreak: 'break-word'
+                        }}
+                      >
+                        ❌ {course.course_code} - {course.course_name}
+                      </Badge>
+                    ))}
+                  </div>
+                  <small className="text-muted mt-2">
+                    You failed to mark attendance for these courses today.
+                  </small>
+                </>
               )}
             </Card>
           </Col>
