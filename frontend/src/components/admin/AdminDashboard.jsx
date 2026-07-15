@@ -351,7 +351,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ FIXED: Handle Enroll Students with VERIFICATION
+  // ✅ ENHANCED: Handle Enroll Students with FULL Debugging
   const handleEnrollStudents = async () => {
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -361,88 +361,122 @@ const AdminDashboard = () => {
     setEnrollLoading(true);
     setEnrollMessage('');
     addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
+    addDebug(`📋 Selected Course ID: ${selectedCourse}`);
+    
+    // Find course name
+    const course = courses.find(c => c.id === selectedCourse);
+    addDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
     try {
       let successCount = 0;
       let failCount = 0;
       let alreadyEnrolledCount = 0;
+      let errorDetails = [];
       
       for (let studentId of selectedStudents) {
+        addDebug(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
         addDebug(`🔵 Processing student: ${studentId}`);
         
-        // Step 1: Get current enrolled courses
-        const { data: studentData, error: fetchError } = await supabase
-          .from('users')
-          .select('id, full_name, email, enrolled_courses')
-          .eq('id', studentId)
-          .single();
+        try {
+          // Step 1: Get current enrolled courses
+          addDebug(`📤 Fetching current enrollment for student...`);
+          const { data: studentData, error: fetchError } = await supabase
+            .from('users')
+            .select('id, full_name, email, enrolled_courses')
+            .eq('id', studentId)
+            .single();
 
-        if (fetchError) {
-          addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
-          failCount++;
-          continue;
-        }
-
-        const currentCourses = studentData?.enrolled_courses || [];
-        addDebug(`📋 Current courses for ${studentData.full_name}: ${currentCourses.length} courses`);
-
-        // Step 2: Check if already enrolled
-        if (currentCourses.includes(selectedCourse)) {
-          addDebug(`⚠️ ${studentData.full_name} already enrolled in this course`);
-          alreadyEnrolledCount++;
-          continue;
-        }
-
-        // Step 3: Add new course
-        const updatedCourses = [...currentCourses, selectedCourse];
-        addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
-
-        // Step 4: Update database
-        const { error: updateError } = await supabase
-          .from('users')
-          .update({ 
-            enrolled_courses: updatedCourses 
-          })
-          .eq('id', studentId);
-
-        if (updateError) {
-          addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
-          failCount++;
-          continue;
-        }
-
-        // Step 5: VERIFY the update worked
-        const { data: verifyData, error: verifyError } = await supabase
-          .from('users')
-          .select('enrolled_courses')
-          .eq('id', studentId)
-          .single();
-
-        if (verifyError) {
-          addDebug(`⚠️ Verification failed: ${verifyError.message}`, true);
-          failCount++;
-        } else {
-          const verifiedCourses = verifyData?.enrolled_courses || [];
-          if (verifiedCourses.includes(selectedCourse)) {
-            addDebug(`✅ VERIFIED: ${studentData.full_name} successfully enrolled!`);
-            successCount++;
-          } else {
-            addDebug(`❌ VERIFICATION FAILED: ${studentData.full_name} not enrolled!`, true);
+          if (fetchError) {
+            addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
+            addDebug(`❌ Error code: ${fetchError.code}`, true);
+            addDebug(`❌ Error details: ${fetchError.details || 'No details'}`, true);
             failCount++;
+            errorDetails.push({ studentId, error: fetchError });
+            continue;
           }
+
+          const studentName = studentData?.full_name || 'Unknown';
+          const currentCourses = studentData?.enrolled_courses || [];
+          addDebug(`📋 ${studentName} - Current courses: ${currentCourses.length}`);
+          addDebug(`📋 Course IDs: ${JSON.stringify(currentCourses)}`);
+
+          // Step 2: Check if already enrolled
+          if (currentCourses.includes(selectedCourse)) {
+            addDebug(`⚠️ ${studentName} already enrolled in this course`);
+            alreadyEnrolledCount++;
+            continue;
+          }
+
+          // Step 3: Add new course
+          const updatedCourses = [...currentCourses, selectedCourse];
+          addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
+          addDebug(`📤 New course IDs: ${JSON.stringify(updatedCourses)}`);
+
+          // Step 4: Update database with FULL error handling
+          const { data: updateData, error: updateError } = await supabase
+            .from('users')
+            .update({ 
+              enrolled_courses: updatedCourses 
+            })
+            .eq('id', studentId)
+            .select();
+
+          if (updateError) {
+            addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
+            addDebug(`❌ Error code: ${updateError.code}`, true);
+            addDebug(`❌ Error details: ${updateError.details || 'No details'}`, true);
+            addDebug(`❌ Error hint: ${updateError.hint || 'No hint'}`, true);
+            failCount++;
+            errorDetails.push({ studentId, error: updateError });
+            continue;
+          }
+
+          // Step 5: VERIFY the update worked
+          addDebug(`🔍 Verifying enrollment for ${studentName}...`);
+          const { data: verifyData, error: verifyError } = await supabase
+            .from('users')
+            .select('enrolled_courses')
+            .eq('id', studentId)
+            .single();
+
+          if (verifyError) {
+            addDebug(`⚠️ Verification failed: ${verifyError.message}`, true);
+            failCount++;
+            errorDetails.push({ studentId, error: verifyError });
+          } else {
+            const verifiedCourses = verifyData?.enrolled_courses || [];
+            addDebug(`📋 Verified courses: ${JSON.stringify(verifiedCourses)}`);
+            if (verifiedCourses.includes(selectedCourse)) {
+              addDebug(`✅ VERIFIED: ${studentName} successfully enrolled!`);
+              successCount++;
+            } else {
+              addDebug(`❌ VERIFICATION FAILED: ${studentName} not enrolled!`, true);
+              addDebug(`❌ Expected: ${selectedCourse}, Got: ${JSON.stringify(verifiedCourses)}`, true);
+              failCount++;
+              errorDetails.push({ studentId, error: { message: 'Verification failed - course not in array' } });
+            }
+          }
+        } catch (err) {
+          addDebug(`❌ Unexpected error for ${studentId}: ${err.message}`, true);
+          addDebug(`❌ Stack: ${err.stack}`, true);
+          failCount++;
+          errorDetails.push({ studentId, error: err });
         }
       }
 
-      // Show summary message
+      // Show summary message with details
       let summaryMessage = '';
       if (successCount > 0) summaryMessage += `✅ ${successCount} student(s) enrolled successfully! `;
       if (alreadyEnrolledCount > 0) summaryMessage += `⚠️ ${alreadyEnrolledCount} student(s) already enrolled. `;
-      if (failCount > 0) summaryMessage += `❌ ${failCount} student(s) failed to enroll.`;
+      if (failCount > 0) {
+        summaryMessage += `❌ ${failCount} student(s) failed to enroll.`;
+        addDebug(`❌ Error details: ${JSON.stringify(errorDetails)}`, true);
+      }
       
       if (successCount === 0 && failCount === 0 && alreadyEnrolledCount > 0) {
         summaryMessage = `⚠️ All ${alreadyEnrolledCount} student(s) were already enrolled.`;
       } else if (successCount === 0 && failCount > 0) {
-        summaryMessage = `❌ All ${failCount} student(s) failed to enroll. Please check logs.`;
+        summaryMessage = `❌ All ${failCount} student(s) failed to enroll. Check debug log for details.`;
       }
       
       setEnrollMessage(summaryMessage);
@@ -458,10 +492,11 @@ const AdminDashboard = () => {
         setSelectedStudents([]);
         setSelectedCourse(null);
         setEnrollLoading(false);
-      }, 2000);
+      }, 3000);
 
     } catch (error) {
       addDebug(`❌ Enrollment error: ${error.message}`, true);
+      addDebug(`❌ Stack: ${error.stack}`, true);
       setEnrollMessage('❌ ' + error.message);
       setEnrollLoading(false);
     }
@@ -544,36 +579,52 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Debug Panel */}
+        {/* Debug Panel - Enhanced */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
-          <h6 className="mb-2">🔍 Debug Log</h6>
-          <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
+          <h6 className="mb-2">🔍 Debug Log ({debugMessages.length} messages)</h6>
+          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
             {debugMessages.length === 0 ? (
               <div className="text-muted">Waiting for data...</div>
             ) : (
-              debugMessages.slice(-10).map((msg, idx) => (
+              debugMessages.slice(-20).map((msg, idx) => (
                 <div key={idx} style={{ 
                   color: msg.isError ? '#dc3545' : '#28a745',
                   borderBottom: '1px solid #e9ecef',
-                  padding: '2px 0'
+                  padding: '3px 0'
                 }}>
                   <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
                 </div>
               ))
             )}
           </div>
-          <Button 
-            variant="outline-secondary" 
-            size="sm" 
-            className="mt-2"
-            onClick={() => {
-              setDebugMessages([]);
-              setDebugError(null);
-              fetchAllData();
-            }}
-          >
-            🔄 Refresh All Data
-          </Button>
+          {debugError && (
+            <Alert variant="danger" className="mt-2 mb-0">
+              ❌ Error: {debugError}
+            </Alert>
+          )}
+          <div className="mt-2 d-flex gap-2">
+            <Button 
+              variant="outline-secondary" 
+              size="sm"
+              onClick={() => {
+                setDebugMessages([]);
+                setDebugError(null);
+                fetchAllData();
+              }}
+            >
+              🔄 Refresh All Data
+            </Button>
+            <Button 
+              variant="outline-danger" 
+              size="sm"
+              onClick={() => {
+                setDebugMessages([]);
+                setDebugError(null);
+              }}
+            >
+              🗑️ Clear Logs
+            </Button>
+          </div>
         </Card>
 
         {/* Statistics Cards */}
@@ -610,7 +661,7 @@ const AdminDashboard = () => {
           </Col>
         </Row>
 
-        {/* Course Attendance Stats - Dropdown with Search */}
+        {/* Course Attendance Stats */}
         <Row className="mb-4">
           <Col md={12}>
             <Card className="p-3">
@@ -1027,7 +1078,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Enroll Students Modal with Search */}
+        {/* Enroll Students Modal */}
         <Modal show={showEnrollModal} onHide={() => setShowEnrollModal(false)} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>👥 Enroll Students in Course</Modal.Title>
