@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { Container, Row, Col, Card, Badge, Spinner, Alert, Form } from 'react-bootstrap';
+import { Container, Row, Col, Card, Table, Spinner, Alert, Form, Badge } from 'react-bootstrap';
 
 const MyCourses = () => {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [semesterPreference, setSemesterPreference] = useState('First');
-  const [enrolledCourses, setEnrolledCourses] = useState([]);
   const user = JSON.parse(localStorage.getItem('user'));
 
   useEffect(() => {
@@ -25,8 +24,6 @@ const MyCourses = () => {
 
       if (userError) throw userError;
 
-      setEnrolledCourses(userData?.enrolled_courses || []);
-      
       const pref = userData?.semester_preference || 'First';
       setSemesterPreference(pref);
 
@@ -68,6 +65,7 @@ const MyCourses = () => {
     }
   };
 
+  // Filter courses by selected semester
   const filteredCourses = courses.filter(c => c.semester === semesterPreference);
 
   if (loading) {
@@ -106,103 +104,39 @@ const MyCourses = () => {
             You have no courses for <strong>{semesterPreference} Semester</strong>. Please switch to the other semester.
           </Alert>
         ) : (
-          <Row>
-            {filteredCourses.map((course) => {
-              const isAttendanceOn = course.attendance_enabled !== false;
-              const isActive = course.is_active !== false;
-              
-              let statusMessage = '';
-              let statusColor = '';
-              let statusBadge = '';
-
-              if (!isActive) {
-                statusMessage = '⏳ Course Inactive';
-                statusColor = '#6c757d';
-                statusBadge = 'secondary';
-              } else if (!isAttendanceOn) {
-                statusMessage = '⏳ Class hasn\'t commenced yet';
-                statusColor = '#ffc107';
-                statusBadge = 'warning';
-              } else {
-                statusMessage = '✅ Active - You can mark attendance';
-                statusColor = '#28a745';
-                statusBadge = 'success';
-              }
-
-              return (
-                <Col md={6} lg={4} key={course.id} className="mb-3">
-                  <Card className="h-100 shadow-sm" style={{ borderRadius: '15px' }}>
-                    <Card.Body>
-                      <div className="d-flex justify-content-between align-items-start">
-                        <div>
-                          <h5 className="mb-1">{course.course_code}</h5>
-                          <h6 className="text-muted">{course.course_name}</h6>
-                        </div>
-                        <Badge bg={statusBadge} className="p-2">
-                          {isActive && isAttendanceOn ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </div>
-                      
-                      <div className="mt-3">
-                        <small className="text-muted d-block">
-                          <strong>Lecturer:</strong> {course.lecturer || 'N/A'}
-                        </small>
-                        <small className="text-muted d-block">
-                          <strong>Department:</strong> {course.department || 'N/A'}
-                        </small>
-                        <small className="text-muted d-block">
-                          <strong>Level:</strong> {course.level || 'N/A'}
-                        </small>
-                        <small className="text-muted d-block">
-                          <strong>Semester:</strong> {course.semester || 'N/A'}
-                        </small>
-                      </div>
-
-                      <hr />
-                      
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div>
-                          {isActive && isAttendanceOn ? (
-                            <span style={{ color: '#28a745' }}>✅ Available</span>
-                          ) : (
-                            <span style={{ color: '#ffc107' }}>⏳ {isActive ? 'Class hasn\'t commenced' : 'Course Inactive'}</span>
-                          )}
-                        </div>
-                        <Badge bg={isAttendanceOn ? 'success' : 'warning'}>
-                          {isAttendanceOn ? '✅ ON' : '⏳ OFF'}
-                        </Badge>
-                      </div>
-                    </Card.Body>
-                  </Card>
-                </Col>
-              );
-            })}
-          </Row>
+          <Card className="shadow-sm" style={{ borderRadius: '15px' }}>
+            <Card.Body>
+              <Table striped bordered hover responsive>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Course Code</th>
+                    <th>Course Title</th>
+                    <th>Lecturer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredCourses.map((course, index) => (
+                    <tr key={course.id}>
+                      <td>{index + 1}</td>
+                      <td><strong>{course.course_code}</strong></td>
+                      <td>{course.course_name}</td>
+                      <td>{course.lecturer || 'N/A'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </Card.Body>
+          </Card>
         )}
 
+        {/* Summary */}
         <Card className="mt-4 p-3 shadow-sm" style={{ borderRadius: '15px' }}>
-          <h6>📊 Summary</h6>
           <Row>
-            <Col md={4}>
+            <Col md={12}>
               <div className="text-center">
                 <h4>{filteredCourses.length}</h4>
-                <p className="text-muted">Courses in {semesterPreference} Semester</p>
-              </div>
-            </Col>
-            <Col md={4}>
-              <div className="text-center">
-                <h4 style={{ color: '#28a745' }}>
-                  {filteredCourses.filter(c => c.attendance_enabled !== false && c.is_active !== false).length}
-                </h4>
-                <p className="text-muted">Active Courses</p>
-              </div>
-            </Col>
-            <Col md={4}>
-              <div className="text-center">
-                <h4 style={{ color: '#ffc107' }}>
-                  {filteredCourses.filter(c => c.attendance_enabled === false || c.is_active === false).length}
-                </h4>
-                <p className="text-muted">Inactive / Not Started</p>
+                <p className="text-muted">Total Courses in {semesterPreference} Semester</p>
               </div>
             </Col>
           </Row>
