@@ -27,7 +27,7 @@ const AdminDashboard = () => {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [courseSearch, setCourseSearch] = useState('');
   
-  // Semester toggle - only this, no dropdown
+  // Semester toggle
   const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(true);
   
   // Course attendance list modal
@@ -38,6 +38,20 @@ const AdminDashboard = () => {
   // Today's attendance modal
   const [showTodayAttendanceModal, setShowTodayAttendanceModal] = useState(false);
   const [todayAttendanceData, setTodayAttendanceData] = useState([]);
+  
+  // Session states
+  const [showSessionModal, setShowSessionModal] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionMessage, setSessionMessage] = useState('');
+  const [currentSession, setCurrentSession] = useState(null);
+  const [newSessionData, setNewSessionData] = useState({
+    sessionName: '',
+    startDate: '',
+    endDate: ''
+  });
+  const [confirmCode, setConfirmCode] = useState('');
+  const [showWarning, setShowWarning] = useState(false);
+  const [showConfirmStep, setShowConfirmStep] = useState(false);
   
   // Debug state
   const [debugMessages, setDebugMessages] = useState([]);
@@ -145,6 +159,68 @@ const AdminDashboard = () => {
     });
   };
 
+  // Fetch current session
+  const fetchCurrentSession = async () => {
+    try {
+      const { data, error } = await supabase
+        .rpc('get_current_session');
+      
+      if (error) throw error;
+      setCurrentSession(data || null);
+    } catch (error) {
+      console.error('Error fetching session:', error);
+      addDebug(`❌ Session fetch error: ${error.message}`, true);
+    }
+  };
+
+  // Process session rollover
+  const handleSessionRollover = async () => {
+    if (!newSessionData.sessionName || !newSessionData.startDate || !newSessionData.endDate) {
+      setSessionMessage('❌ Please fill in all fields.');
+      return;
+    }
+
+    // Verify confirmation code
+    if (confirmCode !== 'admin123') {
+      setSessionMessage('❌ Invalid confirmation code. Please enter the correct code.');
+      return;
+    }
+
+    setSessionLoading(true);
+    setSessionMessage('');
+
+    try {
+      const { data, error } = await supabase
+        .rpc('process_session_rollover', {
+          new_session_name: newSessionData.sessionName,
+          start_date: newSessionData.startDate,
+          end_date: newSessionData.endDate
+        });
+
+      if (error) throw error;
+
+      setSessionMessage('✅ ' + data);
+      setNewSessionData({ sessionName: '', startDate: '', endDate: '' });
+      setConfirmCode('');
+      setShowWarning(false);
+      setShowConfirmStep(false);
+      
+      // Refresh data
+      await fetchAllData();
+      await fetchCurrentSession();
+
+      setTimeout(() => {
+        setShowSessionModal(false);
+        setSessionMessage('');
+        setSessionLoading(false);
+      }, 3000);
+
+    } catch (error) {
+      setSessionMessage('❌ ' + error.message);
+      setSessionLoading(false);
+    }
+  };
+
   // Re-enroll students after course changes
   const reEnrollStudents = async () => {
     try {
@@ -167,6 +243,7 @@ const AdminDashboard = () => {
   useEffect(() => {
     fetchAllData();
     fetchDepartments();
+    fetchCurrentSession();
   }, []);
 
   // Fetch departments
@@ -411,13 +488,12 @@ const AdminDashboard = () => {
     const { name, value } = e.target;
     setFilters({ ...filters, [name]: value });
     
-    // Auto-filter courses when department or level changes
     if (name === 'department' || name === 'level') {
       applyFilters();
     }
   };
 
-  // Apply filters with search - get distinct students with attendance
+  // Apply filters with search
   const applyFilters = async () => {
     const activeFilters = {};
     if (filters.courseId) activeFilters.courseId = filters.courseId;
@@ -437,7 +513,6 @@ const AdminDashboard = () => {
       );
     }
     
-    // Group logs by student for counting
     const groupedLogs = {};
     logs.forEach(log => {
       const key = log.student_id;
@@ -479,7 +554,7 @@ const AdminDashboard = () => {
     setFilteredLogs(Object.values(groupedLogs));
   };
 
-  // Handle adding new course with department, level, semester
+  // Handle adding new course
   const handleAddCourse = async () => {
     setModalLoading(true);
     setModalMessage('');
@@ -548,7 +623,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // Edit Course Function with department, level, semester
+  // Edit Course Function
   const handleEditCourse = async () => {
     if (!editingCourse) return;
     
@@ -964,7 +1039,7 @@ const AdminDashboard = () => {
     window.URL.revokeObjectURL(url);
   };
 
-  // Get filtered courses based on department and level
+  // Get filtered courses for dropdown
   const getFilteredCoursesForDropdown = () => {
     let filtered = courses;
     if (filters.department) {
@@ -995,7 +1070,6 @@ const AdminDashboard = () => {
     s.email.toLowerCase().includes(studentSearchEnroll.toLowerCase())
   );
 
-  // Get filtered courses for the dropdown in attendance logs
   const courseDropdownOptions = getFilteredCoursesForDropdown();
 
   if (loading) {
@@ -1016,7 +1090,40 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Semester Toggle - Only toggle, no dropdown */}
+        {/* Academic Session Management */}
+        <Card className="mb-4 p-3 shadow-sm" style={{ borderRadius: '12px', background: 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)' }}>
+          <Row className="align-items-center">
+            <Col md={8}>
+              <h6 className="mb-0">📅 Academic Session</h6>
+              {currentSession ? (
+                <small className="text-muted">
+                  Current: <strong>{currentSession.session_name}</strong> 
+                  ({new Date(currentSession.start_date).toLocaleDateString()} - {new Date(currentSession.end_date).toLocaleDateString()})
+                </small>
+              ) : (
+                <small className="text-muted">No active session</small>
+              )}
+            </Col>
+            <Col md={4}>
+              <div className="d-flex justify-content-end">
+                <Button 
+                  variant="warning" 
+                  onClick={() => {
+                    setShowSessionModal(true);
+                    setShowWarning(false);
+                    setShowConfirmStep(false);
+                    setConfirmCode('');
+                    setSessionMessage('');
+                  }}
+                >
+                  🔄 Start New Session
+                </Button>
+              </div>
+            </Col>
+          </Row>
+        </Card>
+
+        {/* Semester Toggle */}
         <Card className="mb-4 p-3 shadow-sm" style={{ borderRadius: '12px', background: 'linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)' }}>
           <Row className="align-items-center">
             <Col md={6}>
@@ -1343,7 +1450,6 @@ const AdminDashboard = () => {
                 </div>
               </div>
               
-              {/* Course Search */}
               <Form.Group className="mb-3">
                 <Form.Control
                   type="text"
@@ -1354,7 +1460,6 @@ const AdminDashboard = () => {
                 />
               </Form.Group>
 
-              {/* All Courses - filtered by semester toggle */}
               <div className="table-container">
                 <Table striped bordered hover responsive>
                   <thead>
@@ -1656,6 +1761,170 @@ const AdminDashboard = () => {
               Close
             </Button>
           </Modal.Footer>
+        </Modal>
+
+        {/* Session Rollover Modal with Warning and Confirmation */}
+        <Modal show={showSessionModal} onHide={() => {
+          setShowSessionModal(false);
+          setSessionMessage('');
+          setNewSessionData({ sessionName: '', startDate: '', endDate: '' });
+          setConfirmCode('');
+          setShowWarning(false);
+          setShowConfirmStep(false);
+        }} size="lg">
+          <Modal.Header closeButton>
+            <Modal.Title>🔄 Start New Academic Session</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {sessionMessage && (
+              <Alert variant={sessionMessage.startsWith('✅') ? 'success' : 'danger'}>
+                <pre style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: '14px' }}>{sessionMessage}</pre>
+              </Alert>
+            )}
+
+            {!showWarning && !showConfirmStep ? (
+              // Step 1: Enter Session Details
+              <>
+                <Form>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Session Name <span className="text-danger">*</span></Form.Label>
+                    <Form.Control
+                      type="text"
+                      placeholder="e.g., 2027/2028 Session"
+                      value={newSessionData.sessionName}
+                      onChange={(e) => setNewSessionData({ ...newSessionData, sessionName: e.target.value })}
+                      disabled={sessionLoading}
+                      required
+                    />
+                  </Form.Group>
+                  <Row>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label>Start Date <span className="text-danger">*</span></Form.Label>
+                        <Form.Control
+                          type="date"
+                          value={newSessionData.startDate}
+                          onChange={(e) => setNewSessionData({ ...newSessionData, startDate: e.target.value })}
+                          disabled={sessionLoading}
+                          required
+                        />
+                        <Form.Text className="text-muted">Typically September 1st</Form.Text>
+                      </Form.Group>
+                    </Col>
+                    <Col md={6}>
+                      <Form.Group className="mb-3">
+                        <Form.Label>End Date <span className="text-danger">*</span></Form.Label>
+                        <Form.Control
+                          type="date"
+                          value={newSessionData.endDate}
+                          onChange={(e) => setNewSessionData({ ...newSessionData, endDate: e.target.value })}
+                          disabled={sessionLoading}
+                          required
+                        />
+                        <Form.Text className="text-muted">Typically December 31st</Form.Text>
+                      </Form.Group>
+                    </Col>
+                  </Row>
+                </Form>
+
+                <div className="d-flex justify-content-end gap-2">
+                  <Button variant="secondary" onClick={() => {
+                    setShowSessionModal(false);
+                    setSessionMessage('');
+                    setNewSessionData({ sessionName: '', startDate: '', endDate: '' });
+                  }} disabled={sessionLoading}>
+                    Cancel
+                  </Button>
+                  <Button 
+                    variant="warning" 
+                    onClick={() => {
+                      if (!newSessionData.sessionName || !newSessionData.startDate || !newSessionData.endDate) {
+                        setSessionMessage('❌ Please fill in all fields.');
+                        return;
+                      }
+                      setShowWarning(true);
+                    }}
+                    disabled={sessionLoading}
+                  >
+                    Continue →
+                  </Button>
+                </div>
+              </>
+            ) : showWarning && !showConfirmStep ? (
+              // Step 2: Warning Confirmation
+              <>
+                <div className="mb-3 p-3 bg-danger text-white rounded" style={{ border: '3px solid #dc3545' }}>
+                  <h5 className="text-white">⚠️ WARNING: This Action Cannot Be Undone!</h5>
+                </div>
+                
+                <div className="mb-3 p-3 bg-light rounded">
+                  <h6>📋 What will happen when you start a new session:</h6>
+                  <ul className="mb-0">
+                    <li>✅ <strong>ND1</strong> students will auto-promote to <strong>ND2</strong></li>
+                    <li>🗑️ <strong>ND2</strong> students will be <strong>permanently deleted</strong> (graduated)</li>
+                    <li>✅ <strong>HND1</strong> students will auto-promote to <strong>HND2</strong></li>
+                    <li>🗑️ <strong>HND2</strong> students will be <strong>permanently deleted</strong> (graduated)</li>
+                    <li>📅 New session will be created</li>
+                  </ul>
+                  <p className="text-danger mt-2 mb-0"><strong>⚠️ This action cannot be undone. All graduated students will be permanently removed from the system.</strong></p>
+                </div>
+
+                <div className="d-flex justify-content-between">
+                  <Button variant="secondary" onClick={() => setShowWarning(false)} disabled={sessionLoading}>
+                    ← Go Back
+                  </Button>
+                  <Button 
+                    variant="danger" 
+                    onClick={() => setShowConfirmStep(true)}
+                    disabled={sessionLoading}
+                  >
+                    I Understand, Continue →
+                  </Button>
+                </div>
+              </>
+            ) : (
+              // Step 3: Enter Confirmation Code
+              <>
+                <div className="mb-3 p-3 bg-warning rounded">
+                  <h6>🔐 Confirmation Required</h6>
+                  <p className="mb-0">Enter the admin confirmation code to proceed with the session rollover.</p>
+                </div>
+
+                <Form>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Confirmation Code <span className="text-danger">*</span></Form.Label>
+                    <Form.Control
+                      type="password"
+                      placeholder="Enter admin confirmation code"
+                      value={confirmCode}
+                      onChange={(e) => setConfirmCode(e.target.value)}
+                      disabled={sessionLoading}
+                      required
+                    />
+                    <Form.Text className="text-muted">
+                      Contact system administrator for the confirmation code.
+                    </Form.Text>
+                  </Form.Group>
+                </Form>
+
+                <div className="d-flex justify-content-between">
+                  <Button variant="secondary" onClick={() => {
+                    setShowConfirmStep(false);
+                    setConfirmCode('');
+                  }} disabled={sessionLoading}>
+                    ← Go Back
+                  </Button>
+                  <Button 
+                    variant="danger" 
+                    onClick={handleSessionRollover} 
+                    disabled={sessionLoading}
+                  >
+                    {sessionLoading ? <Spinner size="sm" /> : '🔄 Confirm & Start New Session'}
+                  </Button>
+                </div>
+              </>
+            )}
+          </Modal.Body>
         </Modal>
 
         {/* Add Course Modal */}
@@ -2025,7 +2294,6 @@ const AdminDashboard = () => {
               </Alert>
             )}
 
-            {/* Debug inside modal */}
             <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #007bff' }}>
               <div className="d-flex justify-content-between align-items-center">
                 <h6 className="mb-0">🔍 Debug Log ({enrollDebug.length} messages)</h6>
