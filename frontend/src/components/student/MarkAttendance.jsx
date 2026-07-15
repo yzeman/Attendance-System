@@ -14,6 +14,7 @@ const MarkAttendance = () => {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [todayAttendance, setTodayAttendance] = useState([]);
+  const [todayAbsent, setTodayAbsent] = useState([]);
   const [debugMessages, setDebugMessages] = useState([]);
   const [faceMatched, setFaceMatched] = useState(false);
   const videoRef = useRef(null);
@@ -36,6 +37,7 @@ const MarkAttendance = () => {
       await startWebcam();
       await fetchCourses();
       await fetchTodayAttendance();
+      await checkAbsentCourses();
       
       addDebug('✅ Initialization complete');
     };
@@ -135,23 +137,31 @@ const MarkAttendance = () => {
       setTodayAttendance(marked);
       addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
       
-      // Auto-select first ACTIVE and UNMARKED course
-      if (courses.length > 0) {
-        const activeCourses = courses.filter(c => c.is_active !== false && c.attendance_enabled !== false);
-        const firstUnmarked = activeCourses.find(c => !marked.includes(c.id));
-        if (firstUnmarked) {
-          setSelectedCourse(firstUnmarked.id);
-          addDebug(`🔄 Auto-selected: ${firstUnmarked.course_code}`);
-        } else {
-          setSelectedCourse('');
-        }
-      }
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
   };
 
-  // Get only ACTIVE courses (is_active = true AND attendance_enabled = true)
+  // Check which courses the student missed (absent)
+  const checkAbsentCourses = async () => {
+    try {
+      addDebug('🔵 Checking absent courses...');
+      
+      // Get all active courses that were available today
+      const activeCourses = courses.filter(c => c.is_active !== false && c.attendance_enabled !== false);
+      
+      // Find courses that are NOT marked today (absent)
+      const absent = activeCourses.filter(c => !todayAttendance.includes(c.id));
+      
+      setTodayAbsent(absent);
+      addDebug(`✅ Absent courses: ${absent.length} course(s)`);
+      
+    } catch (error) {
+      addDebug('❌ Error checking absent courses: ' + error.message, true);
+    }
+  };
+
+  // Get only ACTIVE courses
   const activeCourses = courses.filter(c => c.is_active !== false && c.attendance_enabled !== false);
   
   // Separate active courses into marked and unmarked
@@ -281,6 +291,10 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
+      // Update absent list
+      const updatedAbsent = unmarkedActiveCourses.filter(c => c.id !== selectedCourse);
+      setTodayAbsent(updatedAbsent);
+
       // Auto-select next unmarked active course
       const nextUnmarked = activeCourses.find(c => !updatedMarked.includes(c.id));
       if (nextUnmarked) {
@@ -331,7 +345,7 @@ const MarkAttendance = () => {
         )}
 
         <Row>
-          {/* Left Column - Camera */}
+          {/* Camera Section */}
           <Col md={7}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">📹 Live Camera</h5>
@@ -394,19 +408,52 @@ const MarkAttendance = () => {
                   </span>
                 </div>
               </div>
+
+              {/* MARK ATTENDANCE BUTTON - UNDER CAMERA */}
+              {allActiveCourses > 0 && unmarkedActiveCourses.length > 0 ? (
+                <Button
+                  variant="success"
+                  onClick={handleMarkAttendance}
+                  disabled={isMarking || !modelsReady || modelsLoading || !selectedCourse}
+                  className="w-100 mt-3"
+                  size="lg"
+                  style={{ padding: '16px', fontSize: '1.3rem', borderRadius: '12px' }}
+                >
+                  {isMarking ? (
+                    <>
+                      <Spinner animation="border" size="sm" className="me-2" />
+                      Verifying...
+                    </>
+                  ) : (
+                    '📸 Mark Present'
+                  )}
+                </Button>
+              ) : (
+                allActiveCourses > 0 && (
+                  <Button
+                    variant="success"
+                    disabled={true}
+                    className="w-100 mt-3"
+                    size="lg"
+                    style={{ padding: '16px', fontSize: '1.3rem', borderRadius: '12px' }}
+                  >
+                    ✅ All Done
+                  </Button>
+                )
+              )}
             </Card>
           </Col>
 
-          {/* Right Column - Controls */}
+          {/* Controls Section */}
           <Col md={5}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
-              <h5 className="mb-3">📚 Select Course</h5>
+              <h5 className="mb-3">📚 Course Selection</h5>
 
               {/* Progress Bar */}
               {allActiveCourses > 0 && (
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
-                    <span className="small">Progress</span>
+                    <span className="small">Today's Progress</span>
                     <span className="small fw-bold">{progressPercentage}%</span>
                   </div>
                   <div className="progress" style={{ height: '8px', borderRadius: '10px' }}>
@@ -432,11 +479,11 @@ const MarkAttendance = () => {
                 </Alert>
               ) : (
                 <>
-                  {/* Unmarked Active Courses */}
+                  {/* Available to Mark - Dropdown starts with "Select Course" */}
                   {unmarkedActiveCourses.length > 0 ? (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
-                        ✅ Available to Mark
+                        ✅ Available to Mark ({unmarkedActiveCourses.length})
                       </Form.Label>
                       <Form.Select
                         value={selectedCourse}
@@ -444,6 +491,7 @@ const MarkAttendance = () => {
                         disabled={isMarking}
                         style={{ fontSize: '1rem', padding: '10px', borderRadius: '10px', borderColor: '#28a745' }}
                       >
+                        <option value="">-- Select Course --</option>
                         {unmarkedActiveCourses.map((course) => (
                           <option key={course.id} value={course.id}>
                             {course.course_code} - {course.course_name}
@@ -458,11 +506,29 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
+                  {/* Absent Courses - Courses student failed to mark */}
+                  {todayAbsent.length > 0 && (
+                    <div className="mb-3">
+                      <Form.Label className="fw-bold" style={{ color: '#dc3545' }}>
+                        ❌ Absent Today ({todayAbsent.length})
+                      </Form.Label>
+                      <div className="p-2 rounded" style={{ maxHeight: '100px', overflowY: 'auto', border: '1px solid #dc3545', borderRadius: '10px', background: '#fff5f5' }}>
+                        {todayAbsent.map((course) => (
+                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
+                            <Badge bg="danger" className="p-1">❌</Badge>
+                            <span className="text-muted small">{course.course_code} - {course.course_name}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <small className="text-muted">You failed to mark attendance for these courses today.</small>
+                    </div>
+                  )}
+
                   {/* Already Marked */}
                   {markedActiveCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
-                        ✅ Already Marked Today
+                        ✅ Already Marked ({markedActiveCourses.length})
                       </Form.Label>
                       <div className="p-2 bg-light rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #dee2e6', borderRadius: '10px' }}>
                         {markedActiveCourses.map((course) => (
@@ -476,7 +542,7 @@ const MarkAttendance = () => {
                   )}
 
                   {/* Selected Course Info */}
-                  {getSelectedCourseDetails() && unmarkedActiveCourses.length > 0 && (
+                  {getSelectedCourseDetails() && unmarkedActiveCourses.length > 0 && selectedCourse && (
                     <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745', borderRadius: '10px' }}>
                       <div className="d-flex justify-content-between align-items-center">
                         <div>
@@ -489,37 +555,6 @@ const MarkAttendance = () => {
                         <Badge bg="warning">⏳ Pending</Badge>
                       </div>
                     </div>
-                  )}
-
-                  {/* Mark Button */}
-                  {unmarkedActiveCourses.length > 0 ? (
-                    <Button
-                      variant="success"
-                      onClick={handleMarkAttendance}
-                      disabled={isMarking || !modelsReady || modelsLoading || !selectedCourse}
-                      className="w-100 mt-3"
-                      size="lg"
-                      style={{ padding: '14px', fontSize: '1.2rem', borderRadius: '10px' }}
-                    >
-                      {isMarking ? (
-                        <>
-                          <Spinner animation="border" size="sm" className="me-2" />
-                          Verifying...
-                        </>
-                      ) : (
-                        '📸 Mark Present'
-                      )}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="success"
-                      disabled={true}
-                      className="w-100 mt-3"
-                      size="lg"
-                      style={{ padding: '14px', fontSize: '1.2rem', borderRadius: '10px' }}
-                    >
-                      ✅ All Done
-                    </Button>
                   )}
                 </>
               )}
