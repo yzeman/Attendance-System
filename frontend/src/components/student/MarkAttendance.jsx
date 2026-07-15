@@ -101,12 +101,8 @@ const MarkAttendance = () => {
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
         setCourses(coursesData || []);
         
-        const firstUnmarked = coursesData?.find(c => !todayAttendance.includes(c.id));
-        if (firstUnmarked) {
-          setSelectedCourse(firstUnmarked.id);
-        } else if (coursesData && coursesData.length > 0) {
-          setSelectedCourse(coursesData[0].id);
-        }
+        // ✅ FIX: Auto-select first UNMARKED course only after todayAttendance is loaded
+        // This will be handled in fetchTodayAttendance
       } else {
         addDebug('⚠️ No enrolled courses found');
         setCourses([]);
@@ -140,6 +136,19 @@ const MarkAttendance = () => {
       const marked = (data || []).map(a => a.course_id);
       setTodayAttendance(marked);
       addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
+      
+      // ✅ FIX: Auto-select first UNMARKED course after todayAttendance is loaded
+      if (courses.length > 0) {
+        const firstUnmarked = courses.find(c => !marked.includes(c.id));
+        if (firstUnmarked) {
+          setSelectedCourse(firstUnmarked.id);
+          addDebug(`🔄 Auto-selected unmarked course: ${firstUnmarked.course_code}`);
+        } else {
+          // All courses are marked
+          setSelectedCourse('');
+          addDebug('✅ All courses marked today!');
+        }
+      }
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
@@ -148,6 +157,13 @@ const MarkAttendance = () => {
   const handleMarkAttendance = async () => {
     if (!selectedCourse) {
       setMessage('⚠️ Please select a course.');
+      setMessageType('warning');
+      return;
+    }
+
+    // ✅ FIX: Check if already marked before proceeding
+    if (todayAttendance.includes(selectedCourse)) {
+      setMessage('⚠️ You have already marked attendance for this course today.');
       setMessageType('warning');
       return;
     }
@@ -221,10 +237,11 @@ const MarkAttendance = () => {
         return;
       }
 
+      // Double check if already marked (in case UI is out of sync)
       if (todayAttendance.includes(selectedCourse)) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
-        addDebug('⚠️ Already marked today');
+        addDebug('⚠️ Already marked today (double-check)');
         setIsMarking(false);
         return;
       }
@@ -242,7 +259,9 @@ const MarkAttendance = () => {
         throw insertError;
       }
 
-      setTodayAttendance(prev => [...prev, selectedCourse]);
+      // Update today's attendance list
+      const updatedMarked = [...todayAttendance, selectedCourse];
+      setTodayAttendance(updatedMarked);
       addDebug('✅ Attendance saved successfully');
 
       setMessage('✅ Attendance marked successfully! ✓');
@@ -253,11 +272,19 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
       }
 
-      const nextUnmarked = courses.find(c => !todayAttendance.includes(c.id) && c.id !== selectedCourse);
+      // Auto-select next unmarked course
+      const nextUnmarked = courses.find(c => !updatedMarked.includes(c.id));
       if (nextUnmarked) {
         setTimeout(() => {
           setSelectedCourse(nextUnmarked.id);
           addDebug(`🔄 Auto-selected next course: ${nextUnmarked.course_code}`);
+          setFaceMatched(false);
+        }, 1500);
+      } else {
+        setTimeout(() => {
+          setSelectedCourse('');
+          addDebug('✅ All courses marked today!');
+          setFaceMatched(false);
         }, 1500);
       }
 
@@ -344,14 +371,13 @@ const MarkAttendance = () => {
                   </small>
                 </div>
                 <div>
-                  {/* Progress Indicator */}
                   <small className="text-muted">
                     📊 {todayAttendance.length} / {courses.length} marked
                   </small>
                 </div>
               </div>
 
-              {/* 🔥 MARK ATTENDANCE BUTTON - RIGHT UNDER CAMERA */}
+              {/* MARK ATTENDANCE BUTTON - RIGHT UNDER CAMERA */}
               {unmarkedCourses.length > 0 ? (
                 <Button
                   variant="success"
@@ -367,7 +393,7 @@ const MarkAttendance = () => {
                       Verifying Face...
                     </>
                   ) : (
-                    '📸 Mark Present'
+                    `📸 Mark Present (${courses.find(c => c.id === selectedCourse)?.course_code || ''})`
                   )}
                 </Button>
               ) : (
@@ -434,7 +460,7 @@ const MarkAttendance = () => {
                   {unmarkedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
-                        ✅ Courses to Mark:
+                        ✅ Courses to Mark ({unmarkedCourses.length}):
                       </Form.Label>
                       <Form.Select
                         value={selectedCourse}
@@ -455,9 +481,9 @@ const MarkAttendance = () => {
                   {markedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
-                        ✅ Already Marked Today:
+                        ✅ Already Marked Today ({markedCourses.length}):
                       </Form.Label>
-                      <div className="p-2 bg-light rounded" style={{ border: '1px solid #dee2e6' }}>
+                      <div className="p-2 bg-light rounded" style={{ border: '1px solid #dee2e6', maxHeight: '150px', overflowY: 'auto' }}>
                         {markedCourses.map((course) => (
                           <div key={course.id} className="d-flex align-items-center gap-2">
                             <Badge bg="success">✅</Badge>
@@ -468,8 +494,8 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* Selected Course Info */}
-                  {getSelectedCourseDetails() && unmarkedCourses.length > 0 && (
+                  {/* Selected Course Info - only show if a course is selected and unmarked */}
+                  {getSelectedCourseDetails() && selectedCourse && unmarkedCourses.length > 0 && (
                     <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745' }}>
                       <div className="d-flex justify-content-between align-items-center">
                         <div>
