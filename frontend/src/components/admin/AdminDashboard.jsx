@@ -51,14 +51,30 @@ const AdminDashboard = () => {
   const [modalLoading, setModalLoading] = useState(false);
   const [modalMessage, setModalMessage] = useState('');
 
+  // Edit Course Modal states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingCourse, setEditingCourse] = useState(null);
+  const [editCourseData, setEditCourseData] = useState({
+    courseCode: '',
+    courseName: '',
+    lecturer: ''
+  });
+  const [editLoading, setEditLoading] = useState(false);
+  const [editMessage, setEditMessage] = useState('');
+
+  // Delete Course Modal states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletingCourse, setDeletingCourse] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState('');
+
   // Enroll Modal states
   const [showEnrollModal, setShowEnrollModal] = useState(false);
   const [selectedCourse, setSelectedCourse] = useState(null);
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [enrollLoading, setEnrollLoading] = useState(false);
   const [enrollMessage, setEnrollMessage] = useState('');
-  const [enrollDebug, setEnrollDebug] = useState([]); // Debug inside modal
-  const [enrollComplete, setEnrollComplete] = useState(false); // Track if enrollment is done
+  const [enrollDebug, setEnrollDebug] = useState([]);
   
   // Search states for modals
   const [courseSearchEnroll, setCourseSearchEnroll] = useState('');
@@ -72,7 +88,6 @@ const AdminDashboard = () => {
     const timestamp = new Date().toLocaleTimeString();
     const entry = { timestamp, message, isError };
     setDebugMessages(prev => [...prev, entry]);
-    setEnrollDebug(prev => [...prev, entry]); // Also add to modal debug
     if (isError) {
       setDebugError(message);
     }
@@ -93,7 +108,6 @@ const AdminDashboard = () => {
     navigator.clipboard.writeText(logText).then(() => {
       alert('✅ Debug log copied to clipboard!');
     }).catch(() => {
-      // Fallback for older browsers
       const textarea = document.createElement('textarea');
       textarea.value = logText;
       document.body.appendChild(textarea);
@@ -379,11 +393,121 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ Handle Enroll Students with Debug INSIDE Modal - KEEPS MODAL OPEN
+  // ✅ EDIT COURSE FUNCTION
+  const handleEditCourse = async () => {
+    if (!editingCourse) return;
+    
+    setEditLoading(true);
+    setEditMessage('');
+
+    try {
+      const { error } = await supabase
+        .from('courses')
+        .update({
+          course_code: editCourseData.courseCode.toUpperCase(),
+          course_name: editCourseData.courseName,
+          lecturer: editCourseData.lecturer
+        })
+        .eq('id', editingCourse.id);
+
+      if (error) throw error;
+
+      setEditMessage('✅ Course updated successfully!');
+      addDebug(`✅ Course updated: ${editCourseData.courseCode}`);
+      
+      const { data: coursesData } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_code');
+      setCourses(coursesData || []);
+
+      setTimeout(() => {
+        setShowEditModal(false);
+        setEditMessage('');
+        setEditingCourse(null);
+        setEditLoading(false);
+      }, 1500);
+
+    } catch (error) {
+      setEditMessage('❌ ' + error.message);
+      setEditLoading(false);
+    }
+  };
+
+  // ✅ DELETE COURSE FUNCTION - Also removes from students' enrolled_courses
+  const handleDeleteCourse = async () => {
+    if (!deletingCourse) return;
+    
+    setDeleteLoading(true);
+    setDeleteMessage('');
+
+    try {
+      // Step 1: Remove the course from ALL students' enrolled_courses arrays
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          enrolled_courses: supabase.sql`array_remove(enrolled_courses, ${deletingCourse.id})`
+        })
+        .not('enrolled_courses', 'is', null);
+
+      if (updateError) {
+        console.error('Error removing course from students:', updateError);
+        // Continue anyway to delete the course
+      }
+
+      // Step 2: Delete all attendance records for this course
+      const { error: attError } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('course_id', deletingCourse.id);
+
+      if (attError) {
+        console.error('Error deleting attendance records:', attError);
+        // Continue anyway to delete the course
+      }
+
+      // Step 3: Delete the course
+      const { error } = await supabase
+        .from('courses')
+        .delete()
+        .eq('id', deletingCourse.id);
+
+      if (error) throw error;
+
+      setDeleteMessage('✅ Course deleted successfully!');
+      addDebug(`✅ Course deleted: ${deletingCourse.course_code}`);
+      addDebug(`⚠️ Removed from all students and deleted ${attError ? 'some' : 'all'} attendance records`);
+      
+      const { data: coursesData } = await supabase
+        .from('courses')
+        .select('*')
+        .order('course_code');
+      setCourses(coursesData || []);
+
+      // Refresh students to update their enrolled courses
+      const { data: studentsData } = await supabase
+        .from('users')
+        .select('id, full_name, matric_no, email, phone, created_at, enrolled_courses, role')
+        .eq('role', 'student')
+        .order('full_name');
+      setStudents(studentsData || []);
+
+      setTimeout(() => {
+        setShowDeleteModal(false);
+        setDeleteMessage('');
+        setDeletingCourse(null);
+        setDeleteLoading(false);
+      }, 1500);
+
+    } catch (error) {
+      setDeleteMessage('❌ ' + error.message);
+      setDeleteLoading(false);
+    }
+  };
+
+  // Handle Enroll Students
   const handleEnrollStudents = async () => {
-    // Clear previous debug
     setEnrollDebug([]);
-    setEnrollComplete(false);
     
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -397,12 +521,9 @@ const AdminDashboard = () => {
       const timestamp = new Date().toLocaleTimeString();
       const entry = { timestamp, message, isError };
       setEnrollDebug(prev => [...prev, entry]);
-      console.log(`[${timestamp}] ${message}`);
     };
 
     modalDebug(`🔵 Enrolling ${selectedStudents.length} student(s)`);
-    
-    // Find course name
     const course = courses.find(c => c.id === selectedCourse);
     modalDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
@@ -416,108 +537,74 @@ const AdminDashboard = () => {
         modalDebug(`🔵 Processing student: ${studentId}`);
         
         try {
-          // Step 1: Get current enrolled courses
-          modalDebug(`📤 Fetching current enrollment...`);
           const { data: studentData, error: fetchError } = await supabase
             .from('users')
-            .select('id, full_name, email, enrolled_courses')
+            .select('id, full_name, enrolled_courses')
             .eq('id', studentId)
             .single();
 
           if (fetchError) {
             modalDebug(`❌ Fetch error: ${fetchError.message}`, true);
-            modalDebug(`❌ Code: ${fetchError.code}`, true);
             failCount++;
             continue;
           }
 
-          const studentName = studentData?.full_name || 'Unknown';
-          const currentCourses = studentData?.enrolled_courses || [];
-          modalDebug(`📋 ${studentName} - Current: ${currentCourses.length} courses`);
+          let currentCourses = studentData?.enrolled_courses || [];
+          modalDebug(`📋 ${studentData.full_name} - Current: ${currentCourses.length} courses`);
 
-          // Step 2: Check if already enrolled
           if (currentCourses.includes(selectedCourse)) {
-            modalDebug(`⚠️ ${studentName} already enrolled`);
+            modalDebug(`⚠️ Already enrolled`);
             alreadyEnrolledCount++;
             continue;
           }
 
-          // Step 3: Add new course
           const updatedCourses = [...currentCourses, selectedCourse];
-          modalDebug(`📤 Updating to: ${updatedCourses.length} courses`);
+          const uniqueCourses = [...new Set(updatedCourses)];
+          modalDebug(`📤 Updating to: ${uniqueCourses.length} courses`);
 
-          // Step 4: Update database
-          modalDebug(`💾 Updating database...`);
           const { error: updateError } = await supabase
             .from('users')
-            .update({ 
-              enrolled_courses: updatedCourses 
-            })
+            .update({ enrolled_courses: uniqueCourses })
             .eq('id', studentId);
 
           if (updateError) {
             modalDebug(`❌ Update error: ${updateError.message}`, true);
-            modalDebug(`❌ Code: ${updateError.code}`, true);
-            modalDebug(`❌ Details: ${updateError.details || 'No details'}`, true);
             failCount++;
             continue;
           }
 
-          // Step 5: VERIFY
-          modalDebug(`🔍 Verifying...`);
-          const { data: verifyData, error: verifyError } = await supabase
+          const { data: verifyData } = await supabase
             .from('users')
             .select('enrolled_courses')
             .eq('id', studentId)
             .single();
 
-          if (verifyError) {
-            modalDebug(`⚠️ Verify error: ${verifyError.message}`, true);
-            failCount++;
+          const verifiedCourses = verifyData?.enrolled_courses || [];
+          if (verifiedCourses.includes(selectedCourse)) {
+            modalDebug(`✅ VERIFIED: ${studentData.full_name} enrolled!`);
+            successCount++;
           } else {
-            const verifiedCourses = verifyData?.enrolled_courses || [];
-            if (verifiedCourses.includes(selectedCourse)) {
-              modalDebug(`✅ VERIFIED: ${studentName} enrolled!`);
-              successCount++;
-            } else {
-              modalDebug(`❌ NOT ENROLLED: ${studentName}`, true);
-              modalDebug(`❌ Expected: ${selectedCourse}`, true);
-              modalDebug(`❌ Got: ${JSON.stringify(verifiedCourses)}`, true);
-              failCount++;
-            }
+            modalDebug(`❌ NOT ENROLLED`, true);
+            failCount++;
           }
         } catch (err) {
-          modalDebug(`❌ Unexpected error: ${err.message}`, true);
+          modalDebug(`❌ Error: ${err.message}`, true);
           failCount++;
         }
       }
 
-      // Show summary
-      let summary = '';
-      if (successCount > 0) summary += `✅ ${successCount} enrolled! `;
-      if (alreadyEnrolledCount > 0) summary += `⚠️ ${alreadyEnrolledCount} already enrolled. `;
-      if (failCount > 0) summary += `❌ ${failCount} failed.`;
-      
-      if (successCount === 0 && failCount === 0 && alreadyEnrolledCount > 0) {
-        summary = `⚠️ All ${alreadyEnrolledCount} already enrolled.`;
-      } else if (successCount === 0 && failCount > 0) {
-        summary = `❌ All ${failCount} failed. Check debug log below.`;
-      }
-      
+      let summary = `✅ ${successCount} enrolled, ⚠️ ${alreadyEnrolledCount} already, ❌ ${failCount} failed.`;
       setEnrollMessage(summary);
       modalDebug(`📊 ${summary}`);
-      setEnrollComplete(true);
       
       await fetchAllData();
 
     } catch (error) {
       modalDebug(`❌ ERROR: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
-      setEnrollComplete(true);
     }
     
     setEnrollLoading(false);
-    // MODAL STAYS OPEN - user must click Cancel to close
   };
 
   // Toggle student selection for enrollment
@@ -527,6 +614,25 @@ const AdminDashboard = () => {
         ? prev.filter(id => id !== studentId)
         : [...prev, studentId]
     );
+  };
+
+  // Open edit modal
+  const openEditModal = (course) => {
+    setEditingCourse(course);
+    setEditCourseData({
+      courseCode: course.course_code,
+      courseName: course.course_name,
+      lecturer: course.lecturer || ''
+    });
+    setEditMessage('');
+    setShowEditModal(true);
+  };
+
+  // Open delete modal
+  const openDeleteModal = (course) => {
+    setDeletingCourse(course);
+    setDeleteMessage('');
+    setShowDeleteModal(true);
   };
 
   // Export attendance logs to CSV
@@ -941,12 +1047,13 @@ const AdminDashboard = () => {
                       <th>Course Name</th>
                       <th>Lecturer</th>
                       <th>Enrolled Students</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {courses.length === 0 ? (
                       <tr>
-                        <td colSpan="4" className="text-center text-muted">
+                        <td colSpan="5" className="text-center text-muted">
                           No courses found.
                         </td>
                       </tr>
@@ -964,6 +1071,23 @@ const AdminDashboard = () => {
                               <Badge bg="info">
                                 {enrolledCount}
                               </Badge>
+                            </td>
+                            <td>
+                              <Button 
+                                variant="warning" 
+                                size="sm" 
+                                className="me-1"
+                                onClick={() => openEditModal(course)}
+                              >
+                                ✏️ Edit
+                              </Button>
+                              <Button 
+                                variant="danger" 
+                                size="sm"
+                                onClick={() => openDeleteModal(course)}
+                              >
+                                🗑️ Delete
+                              </Button>
                             </td>
                           </tr>
                         );
@@ -1076,11 +1200,102 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Enroll Students Modal WITH DEBUG INSIDE + COPY BUTTON + STAYS OPEN */}
+        {/* Edit Course Modal */}
+        <Modal show={showEditModal} onHide={() => setShowEditModal(false)}>
+          <Modal.Header closeButton>
+            <Modal.Title>✏️ Edit Course</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {editMessage && (
+              <Alert variant={editMessage.startsWith('✅') ? 'success' : 'danger'}>
+                {editMessage}
+              </Alert>
+            )}
+            <Form>
+              <Form.Group className="mb-3">
+                <Form.Label>Course Code</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., SWD101"
+                  value={editCourseData.courseCode}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, courseCode: e.target.value })}
+                  disabled={editLoading}
+                  required
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Course Name</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., Introduction to Web Development"
+                  value={editCourseData.courseName}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, courseName: e.target.value })}
+                  disabled={editLoading}
+                  required
+                />
+              </Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>Lecturer</Form.Label>
+                <Form.Control
+                  type="text"
+                  placeholder="e.g., Mr. Nta Lawal"
+                  value={editCourseData.lecturer}
+                  onChange={(e) => setEditCourseData({ ...editCourseData, lecturer: e.target.value })}
+                  disabled={editLoading}
+                />
+              </Form.Group>
+            </Form>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowEditModal(false)} disabled={editLoading}>
+              Cancel
+            </Button>
+            <Button variant="warning" onClick={handleEditCourse} disabled={editLoading}>
+              {editLoading ? <Spinner size="sm" /> : '💾 Save Changes'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Delete Course Modal */}
+        <Modal show={showDeleteModal} onHide={() => setShowDeleteModal(false)}>
+          <Modal.Header closeButton>
+            <Modal.Title>🗑️ Delete Course</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            {deleteMessage && (
+              <Alert variant={deleteMessage.startsWith('✅') ? 'success' : 'danger'}>
+                {deleteMessage}
+              </Alert>
+            )}
+            <div className="text-center">
+              <div style={{ fontSize: '48px' }}>⚠️</div>
+              <h5>Are you sure you want to delete this course?</h5>
+              {deletingCourse && (
+                <div className="mt-3">
+                  <p><strong>Course:</strong> {deletingCourse.course_code} - {deletingCourse.course_name}</p>
+                  <p><strong>Lecturer:</strong> {deletingCourse.lecturer || 'N/A'}</p>
+                  <p className="text-danger">
+                    ⚠️ This will also remove the course from all students and delete all attendance records!
+                  </p>
+                  <p className="text-muted small">This action cannot be undone.</p>
+                </div>
+              )}
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setShowDeleteModal(false)} disabled={deleteLoading}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleDeleteCourse} disabled={deleteLoading}>
+              {deleteLoading ? <Spinner size="sm" /> : '🗑️ Delete Permanently'}
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Enroll Students Modal */}
         <Modal show={showEnrollModal} onHide={() => {
           setShowEnrollModal(false);
           setEnrollDebug([]);
-          setEnrollComplete(false);
         }} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>👥 Enroll Students in Course</Modal.Title>
@@ -1092,7 +1307,7 @@ const AdminDashboard = () => {
               </Alert>
             )}
 
-            {/* 🔍 DEBUG INSIDE MODAL WITH COPY BUTTON */}
+            {/* Debug inside modal */}
             <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #007bff' }}>
               <div className="d-flex justify-content-between align-items-center">
                 <h6 className="mb-0">🔍 Debug Log ({enrollDebug.length} messages)</h6>
@@ -1192,7 +1407,6 @@ const AdminDashboard = () => {
             <Button variant="secondary" onClick={() => {
               setShowEnrollModal(false);
               setEnrollDebug([]);
-              setEnrollComplete(false);
             }} disabled={enrollLoading}>
               Close
             </Button>
