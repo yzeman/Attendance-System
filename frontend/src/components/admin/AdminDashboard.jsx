@@ -5,6 +5,85 @@ import {
   Badge, Alert, Spinner, Modal, Tab, Tabs 
 } from 'react-bootstrap';
 
+// ✅ Course Table Component - Defined OUTSIDE the main component
+const CourseTable = ({ courses, students, onEdit, onDelete, onToggleAttendance }) => {
+  if (courses.length === 0) {
+    return <p className="text-muted text-center py-3">No courses found in this semester.</p>;
+  }
+  
+  return (
+    <Table striped bordered hover responsive>
+      <thead>
+        <tr>
+          <th>Course Code</th>
+          <th>Course Name</th>
+          <th>Lecturer</th>
+          <th>Department</th>
+          <th>Level</th>
+          <th>Semester</th>
+          <th>Status</th>
+          <th>Mark Attendance</th>
+          <th>Enrolled</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {courses.map((course) => {
+          const enrolledCount = students.filter(s => 
+            s.enrolled_courses?.includes(course.id)
+          ).length;
+          return (
+            <tr key={course.id}>
+              <td><strong>{course.course_code}</strong></td>
+              <td>{course.course_name}</td>
+              <td>{course.lecturer || 'N/A'}</td>
+              <td>{course.department || 'N/A'}</td>
+              <td>{course.level || 'N/A'}</td>
+              <td>{course.semester || 'N/A'}</td>
+              <td>
+                <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
+                  {course.is_active !== false ? 'Active' : 'Inactive'}
+                </Badge>
+              </td>
+              <td>
+                <Button 
+                  variant={course.can_mark_attendance !== false ? 'success' : 'danger'}
+                  size="sm"
+                  onClick={() => onToggleAttendance(course.id, course.can_mark_attendance !== false)}
+                >
+                  {course.can_mark_attendance !== false ? '✅ ON' : '❌ OFF'}
+                </Button>
+              </td>
+              <td>
+                <Badge bg="info">
+                  {enrolledCount}
+                </Badge>
+              </td>
+              <td>
+                <Button 
+                  variant="warning" 
+                  size="sm" 
+                  className="me-1"
+                  onClick={() => onEdit(course)}
+                >
+                  ✏️ Edit
+                </Button>
+                <Button 
+                  variant="danger" 
+                  size="sm"
+                  onClick={() => onDelete(course)}
+                >
+                  🗑️ Delete
+                </Button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </Table>
+  );
+};
+
 const AdminDashboard = () => {
   // State variables
   const [loading, setLoading] = useState(true);
@@ -426,17 +505,6 @@ const AdminDashboard = () => {
 
       if (filterObj.courseId) query = query.eq('course_id', filterObj.courseId);
       if (filterObj.studentId) query = query.eq('student_id', filterObj.studentId);
-      
-      // Department filter - filter through student data
-      if (filterObj.department) {
-        // We'll filter client-side for department
-      }
-      if (filterObj.level) {
-        // We'll filter client-side for level
-      }
-      if (filterObj.semester) {
-        // We'll filter client-side for semester
-      }
       
       if (filterObj.month) {
         const start = new Date(filterObj.month + '-01');
@@ -1482,15 +1550,13 @@ const AdminDashboard = () => {
               {selectedSemester === 'First' && (
                 <>
                   <h6 className="mt-3 text-primary">📖 First Semester Courses</h6>
-                  <div className="table-container">
-                    <CourseTable 
-                      courses={filterCoursesBySearch(firstSemesterCourses)}
-                      students={students}
-                      onEdit={openEditModal}
-                      onDelete={openDeleteModal}
-                      onToggleAttendance={toggleCourseAttendance}
-                    />
-                  </div>
+                  <CourseTable 
+                    courses={filterCoursesBySearch(firstSemesterCourses)}
+                    students={students}
+                    onEdit={openEditModal}
+                    onDelete={openDeleteModal}
+                    onToggleAttendance={toggleCourseAttendance}
+                  />
                 </>
               )}
 
@@ -1498,15 +1564,13 @@ const AdminDashboard = () => {
               {selectedSemester === 'Second' && secondSemesterEnabled && (
                 <>
                   <h6 className="mt-3 text-success">📖 Second Semester Courses</h6>
-                  <div className="table-container">
-                    <CourseTable 
-                      courses={filterCoursesBySearch(secondSemesterCourses)}
-                      students={students}
-                      onEdit={openEditModal}
-                      onDelete={openDeleteModal}
-                      onToggleAttendance={toggleCourseAttendance}
-                    />
-                  </div>
+                  <CourseTable 
+                    courses={filterCoursesBySearch(secondSemesterCourses)}
+                    students={students}
+                    onEdit={openEditModal}
+                    onDelete={openDeleteModal}
+                    onToggleAttendance={toggleCourseAttendance}
+                  />
                 </>
               )}
 
@@ -1617,90 +1681,6 @@ const AdminDashboard = () => {
             </Card>
           </Tab>
         </Tabs>
-
-        {/* Course Table Component */}
-        {(() => {
-          // This is a helper component to avoid duplicate table code
-          const CourseTable = ({ courses, students, onEdit, onDelete, onToggleAttendance }) => {
-            if (courses.length === 0) {
-              return <p className="text-muted text-center py-3">No courses found in this semester.</p>;
-            }
-            return (
-              <Table striped bordered hover responsive>
-                <thead>
-                  <tr>
-                    <th>Course Code</th>
-                    <th>Course Name</th>
-                    <th>Lecturer</th>
-                    <th>Department</th>
-                    <th>Level</th>
-                    <th>Semester</th>
-                    <th>Status</th>
-                    <th>Mark Attendance</th>
-                    <th>Enrolled</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {courses.map((course) => {
-                    const enrolledCount = students.filter(s => 
-                      s.enrolled_courses?.includes(course.id)
-                    ).length;
-                    return (
-                      <tr key={course.id}>
-                        <td><strong>{course.course_code}</strong></td>
-                        <td>{course.course_name}</td>
-                        <td>{course.lecturer || 'N/A'}</td>
-                        <td>{course.department || 'N/A'}</td>
-                        <td>{course.level || 'N/A'}</td>
-                        <td>{course.semester || 'N/A'}</td>
-                        <td>
-                          <Badge bg={course.is_active !== false ? 'success' : 'secondary'}>
-                            {course.is_active !== false ? 'Active' : 'Inactive'}
-                          </Badge>
-                        </td>
-                        <td>
-                          <Button 
-                            variant={course.can_mark_attendance !== false ? 'success' : 'danger'}
-                            size="sm"
-                            onClick={() => onToggleAttendance(course.id, course.can_mark_attendance !== false)}
-                          >
-                            {course.can_mark_attendance !== false ? '✅ ON' : '❌ OFF'}
-                          </Button>
-                        </td>
-                        <td>
-                          <Badge bg="info">
-                            {enrolledCount}
-                          </Badge>
-                        </td>
-                        <td>
-                          <Button 
-                            variant="warning" 
-                            size="sm" 
-                            className="me-1"
-                            onClick={() => onEdit(course)}
-                          >
-                            ✏️ Edit
-                          </Button>
-                          <Button 
-                            variant="danger" 
-                            size="sm"
-                            onClick={() => onDelete(course)}
-                          >
-                            🗑️ Delete
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </Table>
-            );
-          };
-          // This is where the CourseTable would render, but since it's inside a function, we need to render it properly
-          // The actual rendering is done in the courses tab above
-          return null;
-        })()}
 
         {/* Modals - Add Course */}
         <Modal show={showCourseModal} onHide={() => setShowCourseModal(false)}>
