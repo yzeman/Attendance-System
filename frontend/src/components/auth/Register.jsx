@@ -37,14 +37,18 @@ const Register = () => {
   useEffect(() => {
     const init = async () => {
       addDebugLog('🔵 Register page mounted - starting...');
+      
+      // 1. Start webcam first
+      addDebugLog('📷 Starting webcam...');
       await startWebcam();
       
+      // 2. Load models with retry
       setModelsLoading(true);
-      addDebugLog('🔄 Loading face models (attempt 1/5)...');
+      addDebugLog('🔄 Loading face models...');
       
       let loaded = false;
       let attempts = 0;
-      const maxAttempts = 5;
+      const maxAttempts = 3;
       
       while (!loaded && attempts < maxAttempts) {
         attempts++;
@@ -58,8 +62,8 @@ const Register = () => {
         }
         
         if (!loaded && attempts < maxAttempts) {
-          addDebugLog(`⏳ Waiting 3 seconds before retry ${attempts + 1}...`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          addDebugLog(`⏳ Waiting 2 seconds before retry...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
         }
       }
       
@@ -69,7 +73,7 @@ const Register = () => {
       if (loaded) {
         addDebugLog('✅ Models are ready! You can now capture faces.');
       } else {
-        addDebugLog('❌ Models failed after 5 attempts. Please refresh the page.');
+        addDebugLog('❌ Models failed to load. Please refresh the page.');
         setError('Face models failed to load. Please refresh the page and try again.');
       }
     };
@@ -141,12 +145,14 @@ const Register = () => {
     setLoading(true);
     addDebugLog('📝 Submitting registration...');
 
+    // Validate passwords match
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match.');
       setLoading(false);
       return;
     }
 
+    // Validate face samples
     if (faceDescriptors.length < 2) {
       setError('Please capture at least 2 face samples for accurate recognition.');
       setLoading(false);
@@ -174,9 +180,9 @@ const Register = () => {
 
       addDebugLog('✅ Auth account created! User ID: ' + authData.user.id);
 
-      // ⭐ KEY FIX: Wait 2 seconds for auth to propagate
-      addDebugLog('⏳ Waiting 2 seconds for auth to propagate...');
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (!authData.user) {
+        throw new Error('Registration failed. Please try again.');
+      }
 
       // Step 2: Insert into users table
       addDebugLog('💾 Step 2: Inserting into users table...');
@@ -193,10 +199,9 @@ const Register = () => {
 
       addDebugLog('📤 Insert data:', insertData);
 
-      const { data: insertResult, error: insertError } = await supabase
+      const { error: insertError } = await supabase
         .from('users')
-        .insert(insertData)
-        .select();
+        .insert(insertData);
 
       if (insertError) {
         addDebugLog('❌ Insert error:', {
@@ -208,9 +213,8 @@ const Register = () => {
         throw insertError;
       }
 
-      addDebugLog('✅ User profile inserted!', insertResult);
+      addDebugLog('✅ User profile inserted successfully!');
 
-      setDebugMessage('✅ Registration successful!');
       setSuccess('✅ Registration successful! You can now login.');
       setFormData({
         fullName: '',
@@ -222,9 +226,10 @@ const Register = () => {
       });
       setFaceDescriptors([]);
 
+      // Redirect to login after 3 seconds
       setTimeout(() => {
         navigate('/login');
-      }, 2000);
+      }, 3000);
 
     } catch (err) {
       addDebugLog('❌ Registration error: ' + err.message, {
@@ -254,13 +259,15 @@ const Register = () => {
               <p className="text-muted">Create your account with face enrolment</p>
             </div>
 
+            {/* Debug Status */}
             <Alert variant="info" className="mb-3">
               <strong>🔍 Status:</strong> {debugMessage}
             </Alert>
 
+            {/* Debug Log */}
             <div className="mb-3" style={{ maxHeight: '150px', overflowY: 'auto', background: '#f8f9fa', borderRadius: '5px', padding: '10px', fontSize: '12px', fontFamily: 'monospace' }}>
               <strong>📋 Debug Log:</strong>
-              {debugDetails.map((log, index) => (
+              {debugDetails.slice(-10).map((log, index) => (
                 <div key={index} style={{ borderBottom: '1px solid #eee', padding: '2px 0' }}>
                   <span style={{ color: '#666' }}>[{log.timestamp}]</span> {log.message}
                   {log.data && (
@@ -418,7 +425,7 @@ const Register = () => {
                       </Button>
                       {modelsLoading && (
                         <div className="text-warning small mt-2">
-                          ⏳ Loading face models... Please wait (10-15 seconds)
+                          ⏳ Loading face models...
                         </div>
                       )}
                       {!modelsLoading && !modelsReady && (
