@@ -111,15 +111,16 @@ const AdminDashboard = () => {
       }
       setCourses(coursesData || []);
 
-      // Fetch all attendance logs
+      // Fetch all attendance logs - STORE the result
       addDebug('🔵 Fetching attendance logs...');
       const logs = await fetchAttendanceLogs();
       addDebug(`✅ Attendance logs fetched: ${logs?.length || 0} records`);
-
-      // Update stats
+      
+      // ✅ FIXED: Use the fetched logs directly for stats
       const totalAttendance = logs?.length || 0;
       const presentCount = logs?.filter(a => a.status === 'present').length || 0;
       
+      // Update stats with the correct values
       setStats({
         totalStudents: studentsData?.length || 0,
         totalCourses: coursesData?.length || 0,
@@ -128,6 +129,7 @@ const AdminDashboard = () => {
       });
 
       setFilteredLogs(logs || []);
+      addDebug(`✅ Stats updated: ${totalAttendance} attendance records`);
       addDebug('✅ All data loaded successfully!');
 
     } catch (error) {
@@ -268,7 +270,7 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ FIXED: Handle Enroll Students with Debugging
+  // Handle Enroll Students
   const handleEnrollStudents = async () => {
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
@@ -279,7 +281,6 @@ const AdminDashboard = () => {
     setEnrollMessage('');
     addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
     
-    // Find course name
     const course = courses.find(c => c.id === selectedCourse);
     addDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
@@ -289,7 +290,6 @@ const AdminDashboard = () => {
       for (let studentId of selectedStudents) {
         addDebug(`🔵 Processing student: ${studentId}`);
         
-        // Step 1: Get current enrolled courses
         const { data: studentData, error: fetchError } = await supabase
           .from('users')
           .select('id, full_name, email, enrolled_courses')
@@ -303,19 +303,15 @@ const AdminDashboard = () => {
 
         const currentCourses = studentData?.enrolled_courses || [];
         addDebug(`📋 Current courses for ${studentData.full_name}: ${currentCourses.length} courses`);
-        addDebug(`📋 Course IDs: ${JSON.stringify(currentCourses)}`);
 
-        // Step 2: Check if already enrolled
         if (currentCourses.includes(selectedCourse)) {
           addDebug(`⚠️ ${studentData.full_name} already enrolled in this course`);
           continue;
         }
 
-        // Step 3: Add new course
         const updatedCourses = [...currentCourses, selectedCourse];
         addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
 
-        // Step 4: Update database
         const { error: updateError } = await supabase
           .from('users')
           .update({
@@ -335,7 +331,6 @@ const AdminDashboard = () => {
       addDebug(`✅ All done! ${successCount} student(s) enrolled successfully`);
       setEnrollMessage(`✅ ${successCount} student(s) enrolled successfully!`);
       
-      // Refresh data
       await fetchAllData();
       
       setTimeout(() => {
