@@ -57,6 +57,7 @@ const AdminDashboard = () => {
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [enrollLoading, setEnrollLoading] = useState(false);
   const [enrollMessage, setEnrollMessage] = useState('');
+  const [enrollDebug, setEnrollDebug] = useState([]); // Debug inside modal
   
   // Search states for modals
   const [courseSearchEnroll, setCourseSearchEnroll] = useState('');
@@ -70,10 +71,16 @@ const AdminDashboard = () => {
     const timestamp = new Date().toLocaleTimeString();
     const entry = { timestamp, message, isError };
     setDebugMessages(prev => [...prev, entry]);
+    setEnrollDebug(prev => [...prev, entry]); // Also add to modal debug
     if (isError) {
       setDebugError(message);
     }
     console.log(`[${timestamp}] ${message}`);
+  };
+
+  // Clear modal debug
+  const clearEnrollDebug = () => {
+    setEnrollDebug([]);
   };
 
   // Load all data on mount
@@ -351,8 +358,11 @@ const AdminDashboard = () => {
     }
   };
 
-  // ✅ ENHANCED: Handle Enroll Students with FULL Debugging
+  // ✅ ENHANCED: Handle Enroll Students with Debug INSIDE Modal
   const handleEnrollStudents = async () => {
+    // Clear previous debug
+    setEnrollDebug([]);
+    
     if (!selectedCourse || selectedStudents.length === 0) {
       setEnrollMessage('Please select a course and at least one student.');
       return;
@@ -360,26 +370,32 @@ const AdminDashboard = () => {
 
     setEnrollLoading(true);
     setEnrollMessage('');
-    addDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
-    addDebug(`📋 Selected Course ID: ${selectedCourse}`);
+    
+    const modalDebug = (message, isError = false) => {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = { timestamp, message, isError };
+      setEnrollDebug(prev => [...prev, entry]);
+      console.log(`[${timestamp}] ${message}`);
+    };
+
+    modalDebug(`🔵 Enrolling ${selectedStudents.length} student(s) in course: ${selectedCourse}`);
     
     // Find course name
     const course = courses.find(c => c.id === selectedCourse);
-    addDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
+    modalDebug(`📋 Course: ${course?.course_code} - ${course?.course_name}`);
 
     try {
       let successCount = 0;
       let failCount = 0;
       let alreadyEnrolledCount = 0;
-      let errorDetails = [];
       
       for (let studentId of selectedStudents) {
-        addDebug(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        addDebug(`🔵 Processing student: ${studentId}`);
+        modalDebug(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        modalDebug(`🔵 Processing student: ${studentId}`);
         
         try {
           // Step 1: Get current enrolled courses
-          addDebug(`📤 Fetching current enrollment for student...`);
+          modalDebug(`📤 Fetching current enrollment...`);
           const { data: studentData, error: fetchError } = await supabase
             .from('users')
             .select('id, full_name, email, enrolled_courses')
@@ -387,52 +403,48 @@ const AdminDashboard = () => {
             .single();
 
           if (fetchError) {
-            addDebug(`❌ Fetch error for ${studentId}: ${fetchError.message}`, true);
-            addDebug(`❌ Error code: ${fetchError.code}`, true);
-            addDebug(`❌ Error details: ${fetchError.details || 'No details'}`, true);
+            modalDebug(`❌ Fetch error: ${fetchError.message}`, true);
+            modalDebug(`❌ Error code: ${fetchError.code}`, true);
+            modalDebug(`❌ Details: ${fetchError.details || 'No details'}`, true);
             failCount++;
-            errorDetails.push({ studentId, error: fetchError });
             continue;
           }
 
           const studentName = studentData?.full_name || 'Unknown';
           const currentCourses = studentData?.enrolled_courses || [];
-          addDebug(`📋 ${studentName} - Current courses: ${currentCourses.length}`);
-          addDebug(`📋 Course IDs: ${JSON.stringify(currentCourses)}`);
+          modalDebug(`📋 ${studentName} - Current courses: ${currentCourses.length}`);
 
           // Step 2: Check if already enrolled
           if (currentCourses.includes(selectedCourse)) {
-            addDebug(`⚠️ ${studentName} already enrolled in this course`);
+            modalDebug(`⚠️ ${studentName} already enrolled in this course`);
             alreadyEnrolledCount++;
             continue;
           }
 
           // Step 3: Add new course
           const updatedCourses = [...currentCourses, selectedCourse];
-          addDebug(`📤 Updating to: ${updatedCourses.length} courses`);
-          addDebug(`📤 New course IDs: ${JSON.stringify(updatedCourses)}`);
+          modalDebug(`📤 Updating to: ${updatedCourses.length} courses`);
 
-          // Step 4: Update database with FULL error handling
-          const { data: updateData, error: updateError } = await supabase
+          // Step 4: Update database
+          modalDebug(`💾 Updating database...`);
+          const { error: updateError } = await supabase
             .from('users')
             .update({ 
               enrolled_courses: updatedCourses 
             })
-            .eq('id', studentId)
-            .select();
+            .eq('id', studentId);
 
           if (updateError) {
-            addDebug(`❌ Update error for ${studentId}: ${updateError.message}`, true);
-            addDebug(`❌ Error code: ${updateError.code}`, true);
-            addDebug(`❌ Error details: ${updateError.details || 'No details'}`, true);
-            addDebug(`❌ Error hint: ${updateError.hint || 'No hint'}`, true);
+            modalDebug(`❌ Update error: ${updateError.message}`, true);
+            modalDebug(`❌ Error code: ${updateError.code}`, true);
+            modalDebug(`❌ Details: ${updateError.details || 'No details'}`, true);
+            modalDebug(`❌ Hint: ${updateError.hint || 'No hint'}`, true);
             failCount++;
-            errorDetails.push({ studentId, error: updateError });
             continue;
           }
 
-          // Step 5: VERIFY the update worked
-          addDebug(`🔍 Verifying enrollment for ${studentName}...`);
+          // Step 5: VERIFY
+          modalDebug(`🔍 Verifying...`);
           const { data: verifyData, error: verifyError } = await supabase
             .from('users')
             .select('enrolled_courses')
@@ -440,63 +452,53 @@ const AdminDashboard = () => {
             .single();
 
           if (verifyError) {
-            addDebug(`⚠️ Verification failed: ${verifyError.message}`, true);
+            modalDebug(`⚠️ Verify error: ${verifyError.message}`, true);
             failCount++;
-            errorDetails.push({ studentId, error: verifyError });
           } else {
             const verifiedCourses = verifyData?.enrolled_courses || [];
-            addDebug(`📋 Verified courses: ${JSON.stringify(verifiedCourses)}`);
             if (verifiedCourses.includes(selectedCourse)) {
-              addDebug(`✅ VERIFIED: ${studentName} successfully enrolled!`);
+              modalDebug(`✅ VERIFIED: ${studentName} enrolled!`);
               successCount++;
             } else {
-              addDebug(`❌ VERIFICATION FAILED: ${studentName} not enrolled!`, true);
-              addDebug(`❌ Expected: ${selectedCourse}, Got: ${JSON.stringify(verifiedCourses)}`, true);
+              modalDebug(`❌ NOT ENROLLED: ${studentName}`, true);
+              modalDebug(`❌ Expected: ${selectedCourse}, Got: ${JSON.stringify(verifiedCourses)}`, true);
               failCount++;
-              errorDetails.push({ studentId, error: { message: 'Verification failed - course not in array' } });
             }
           }
         } catch (err) {
-          addDebug(`❌ Unexpected error for ${studentId}: ${err.message}`, true);
-          addDebug(`❌ Stack: ${err.stack}`, true);
+          modalDebug(`❌ Unexpected error: ${err.message}`, true);
           failCount++;
-          errorDetails.push({ studentId, error: err });
         }
       }
 
-      // Show summary message with details
-      let summaryMessage = '';
-      if (successCount > 0) summaryMessage += `✅ ${successCount} student(s) enrolled successfully! `;
-      if (alreadyEnrolledCount > 0) summaryMessage += `⚠️ ${alreadyEnrolledCount} student(s) already enrolled. `;
-      if (failCount > 0) {
-        summaryMessage += `❌ ${failCount} student(s) failed to enroll.`;
-        addDebug(`❌ Error details: ${JSON.stringify(errorDetails)}`, true);
-      }
+      // Show summary
+      let summary = '';
+      if (successCount > 0) summary += `✅ ${successCount} enrolled! `;
+      if (alreadyEnrolledCount > 0) summary += `⚠️ ${alreadyEnrolledCount} already enrolled. `;
+      if (failCount > 0) summary += `❌ ${failCount} failed.`;
       
       if (successCount === 0 && failCount === 0 && alreadyEnrolledCount > 0) {
-        summaryMessage = `⚠️ All ${alreadyEnrolledCount} student(s) were already enrolled.`;
+        summary = `⚠️ All ${alreadyEnrolledCount} already enrolled.`;
       } else if (successCount === 0 && failCount > 0) {
-        summaryMessage = `❌ All ${failCount} student(s) failed to enroll. Check debug log for details.`;
+        summary = `❌ All ${failCount} failed. Check debug log below.`;
       }
       
-      setEnrollMessage(summaryMessage);
-      addDebug(`📊 Summary: ${summaryMessage}`);
+      setEnrollMessage(summary);
+      modalDebug(`📊 ${summary}`);
       
-      // Refresh data to show updated enrollment counts
       await fetchAllData();
       
-      // Clear selections after delay
       setTimeout(() => {
         setShowEnrollModal(false);
         setEnrollMessage('');
         setSelectedStudents([]);
         setSelectedCourse(null);
         setEnrollLoading(false);
+        setEnrollDebug([]);
       }, 3000);
 
     } catch (error) {
-      addDebug(`❌ Enrollment error: ${error.message}`, true);
-      addDebug(`❌ Stack: ${error.stack}`, true);
+      modalDebug(`❌ ERROR: ${error.message}`, true);
       setEnrollMessage('❌ ' + error.message);
       setEnrollLoading(false);
     }
@@ -579,49 +581,29 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Debug Panel - Enhanced */}
+        {/* Debug Panel */}
         <Card className="mb-4 p-3" style={{ background: '#f8f9fa', border: debugError ? '2px solid red' : '2px solid #007bff' }}>
           <h6 className="mb-2">🔍 Debug Log ({debugMessages.length} messages)</h6>
-          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
+          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace' }}>
             {debugMessages.length === 0 ? (
               <div className="text-muted">Waiting for data...</div>
             ) : (
-              debugMessages.slice(-20).map((msg, idx) => (
+              debugMessages.slice(-15).map((msg, idx) => (
                 <div key={idx} style={{ 
                   color: msg.isError ? '#dc3545' : '#28a745',
                   borderBottom: '1px solid #e9ecef',
-                  padding: '3px 0'
+                  padding: '2px 0'
                 }}>
                   <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
                 </div>
               ))
             )}
           </div>
-          {debugError && (
-            <Alert variant="danger" className="mt-2 mb-0">
-              ❌ Error: {debugError}
-            </Alert>
-          )}
           <div className="mt-2 d-flex gap-2">
-            <Button 
-              variant="outline-secondary" 
-              size="sm"
-              onClick={() => {
-                setDebugMessages([]);
-                setDebugError(null);
-                fetchAllData();
-              }}
-            >
+            <Button variant="outline-secondary" size="sm" onClick={() => { setDebugMessages([]); setDebugError(null); fetchAllData(); }}>
               🔄 Refresh All Data
             </Button>
-            <Button 
-              variant="outline-danger" 
-              size="sm"
-              onClick={() => {
-                setDebugMessages([]);
-                setDebugError(null);
-              }}
-            >
+            <Button variant="outline-danger" size="sm" onClick={() => { setDebugMessages([]); setDebugError(null); }}>
               🗑️ Clear Logs
             </Button>
           </div>
@@ -1078,7 +1060,7 @@ const AdminDashboard = () => {
           </Modal.Footer>
         </Modal>
 
-        {/* Enroll Students Modal */}
+        {/* Enroll Students Modal WITH DEBUG INSIDE */}
         <Modal show={showEnrollModal} onHide={() => setShowEnrollModal(false)} size="lg">
           <Modal.Header closeButton>
             <Modal.Title>👥 Enroll Students in Course</Modal.Title>
@@ -1089,6 +1071,32 @@ const AdminDashboard = () => {
                 {enrollMessage}
               </Alert>
             )}
+
+            {/* 🔍 DEBUG INSIDE MODAL */}
+            <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #007bff' }}>
+              <div className="d-flex justify-content-between align-items-center">
+                <h6 className="mb-0">🔍 Debug Log ({enrollDebug.length} messages)</h6>
+                <Button variant="outline-danger" size="sm" onClick={clearEnrollDebug}>
+                  🗑️ Clear
+                </Button>
+              </div>
+              <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
+                {enrollDebug.length === 0 ? (
+                  <div className="text-muted">Waiting for enrollment...</div>
+                ) : (
+                  enrollDebug.map((msg, idx) => (
+                    <div key={idx} style={{ 
+                      color: msg.isError ? '#dc3545' : '#28a745',
+                      borderBottom: '1px solid #e9ecef',
+                      padding: '2px 0'
+                    }}>
+                      <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </Card>
+
             <Form>
               <Form.Group className="mb-3">
                 <Form.Label>Select Course</Form.Label>
@@ -1124,7 +1132,7 @@ const AdminDashboard = () => {
                     onChange={(e) => setStudentSearchEnroll(e.target.value)}
                     className="mb-2"
                   />
-                  <div className="border rounded p-3" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                  <div className="border rounded p-3" style={{ maxHeight: '250px', overflowY: 'auto' }}>
                     {filteredStudentsEnroll.length === 0 ? (
                       <p className="text-muted">No students found matching your search.</p>
                     ) : (
