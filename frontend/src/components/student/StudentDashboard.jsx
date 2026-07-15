@@ -54,7 +54,6 @@ const StudentDashboard = () => {
 
       // Remove duplicates from enrolled_courses
       let enrolledIds = userData?.enrolled_courses || [];
-      // Use Set to remove duplicates
       enrolledIds = [...new Set(enrolledIds)];
       console.log('🔵 Unique enrolled course IDs:', enrolledIds);
 
@@ -75,7 +74,7 @@ const StudentDashboard = () => {
         setCourses([]);
       }
 
-      // 3. Calculate statistics - use DISTINCT attendance records
+      // 3. Calculate statistics
       const uniqueAttendance = attendanceData || [];
       const presentCount = uniqueAttendance.filter(a => a.status === 'present').length;
       const totalClasses = uniqueAttendance.length;
@@ -89,16 +88,19 @@ const StudentDashboard = () => {
       
       // 5. Get today's courses (distinct)
       const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
-      const { data: todayCoursesData } = await supabase
-        .from('courses')
-        .select('*')
-        .in('id', todayCourseIds.length > 0 ? todayCourseIds : ['00000000-0000-0000-0000-000000000000']);
-
-      setTodayCourses(todayCoursesData || []);
+      let todayCoursesData = [];
+      if (todayCourseIds.length > 0) {
+        const { data: data } = await supabase
+          .from('courses')
+          .select('*')
+          .in('id', todayCourseIds);
+        todayCoursesData = data || [];
+      }
+      setTodayCourses(todayCoursesData);
 
       setStats({
         totalPresent: presentCount,
-        totalCourses: enrolledIds.length, // Use unique count
+        totalCourses: enrolledIds.length,
         attendancePercentage: percentage,
         todayPresent: todayPresent
       });
@@ -110,7 +112,7 @@ const StudentDashboard = () => {
     }
   };
 
-  // Group attendance by course (distinct)
+  // Group attendance by course
   const getAttendanceByCourse = () => {
     const courseMap = {};
     attendance.forEach(record => {
@@ -182,7 +184,7 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* Today's Courses Section */}
+        {/* Today's Courses Section - FIXED STYLING */}
         <Row className="mb-4">
           <Col md={12}>
             <Card className="p-3">
@@ -192,13 +194,18 @@ const StudentDashboard = () => {
                   You haven't attended any courses today.
                 </Alert>
               ) : (
-                <div className="d-flex flex-wrap gap-2">
+                <div className="d-flex flex-wrap gap-2" style={{ maxWidth: '100%' }}>
                   {todayCourses.map((course) => (
                     <Badge 
                       key={course.id} 
                       bg="success" 
-                      className="p-3"
-                      style={{ fontSize: '1rem' }}
+                      className="p-2"
+                      style={{ 
+                        fontSize: '0.9rem', 
+                        maxWidth: '100%',
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-word'
+                      }}
                     >
                       ✅ {course.course_code} - {course.course_name}
                     </Badge>
