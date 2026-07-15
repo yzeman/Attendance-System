@@ -1,84 +1,45 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { loadModels, getFaceDescriptor, compareDescriptors } from '../../utils/faceUtils';
-import { Container, Row, Col, Card, Button, Alert, Spinner, Form, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Card, Table, Badge, Spinner, Alert, Form } from 'react-bootstrap';
 
-const MarkAttendance = () => {
+const StudentDashboard = () => {
+  const [attendance, setAttendance] = useState([]);
   const [courses, setCourses] = useState([]);
+  const [todayCourses, setTodayCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [selectedCourse, setSelectedCourse] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState('');
-  const [isMarking, setIsMarking] = useState(false);
-  const [modelsReady, setModelsReady] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(true);
-  const [webcamStarted, setWebcamStarted] = useState(false);
-  const [todayAttendance, setTodayAttendance] = useState([]);
-  const [debugMessages, setDebugMessages] = useState([]);
-  const [faceMatched, setFaceMatched] = useState(false);
-  const videoRef = useRef(null);
+  const [stats, setStats] = useState({
+    totalPresent: 0,
+    totalCourses: 0,
+    attendancePercentage: 0,
+    todayPresent: 0
+  });
   const user = JSON.parse(localStorage.getItem('user'));
 
-  const addDebug = (message, isError = false) => {
-    const timestamp = new Date().toLocaleTimeString();
-    setDebugMessages(prev => [...prev, { timestamp, message, isError }]);
-    console.log(`[${timestamp}] ${message}`);
-  };
-
   useEffect(() => {
-    const init = async () => {
-      addDebug('🔵 MarkAttendance: Initializing...');
-      
-      // 1. Load face recognition models
-      addDebug('🔄 Loading face models...');
-      setModelsLoading(true);
-      const loaded = await loadModels();
-      setModelsReady(loaded);
-      setModelsLoading(false);
-      addDebug(loaded ? '✅ Models loaded successfully' : '❌ Models failed to load');
-      
-      // 2. Start webcam
-      await startWebcam();
-      
-      // 3. Fetch courses and today's attendance
-      await fetchCourses();
-      await fetchTodayAttendance();
-      
-      addDebug('✅ Initialization complete');
-    };
-    
-    init();
-
-    return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
-      }
-    };
+    fetchData();
   }, []);
 
-  const startWebcam = async () => {
+  const fetchData = async () => {
+    setLoading(true);
     try {
-      addDebug('📷 Starting webcam...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480 }
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setWebcamStarted(true);
-        addDebug('✅ Webcam started');
-      }
-    } catch (err) {
-      console.error('Webcam error:', err);
-      addDebug('❌ Webcam error: ' + err.message);
-      setMessage('⚠️ Unable to access webcam. Please allow camera permissions.');
-      setMessageType('warning');
-    }
-  };
-
-  const fetchCourses = async () => {
-    try {
-      addDebug('🔵 Fetching enrolled courses for: ' + user?.email);
+      console.log('🔵 Student: Fetching data for:', user?.email);
       
+      // 1. Fetch student's attendance records
+      const { data: attendanceData, error: attError } = await supabase
+        .from('attendance')
+        .select('*, course:course_id(course_code, course_name)')
+        .eq('student_id', user.id)
+        .order('date', { ascending: false });
+
+      if (attError) {
+        console.error('❌ Attendance fetch error:', attError);
+      } else {
+        console.log('✅ Attendance fetched:', attendanceData?.length || 0, 'records');
+      }
+      setAttendance(attendanceData || []);
+
+      // 2. Fetch student's enrolled courses - get DISTINCT courses
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses')
@@ -86,14 +47,15 @@ const MarkAttendance = () => {
         .single();
 
       if (userError) {
-        addDebug('❌ User fetch error: ' + userError.message, true);
-        throw userError;
+        console.error('❌ User fetch error:', userError);
+      } else {
+        console.log('✅ User data fetched:', userData);
       }
 
-      // Remove duplicates
+      // Remove duplicates from enrolled_courses
       let enrolledIds = userData?.enrolled_courses || [];
       enrolledIds = [...new Set(enrolledIds)];
-      addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
+      console.log('🔵 Unique enrolled course IDs:', enrolledIds);
 
       if (enrolledIds.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
@@ -102,345 +64,275 @@ const MarkAttendance = () => {
           .in('id', enrolledIds);
 
         if (courseError) {
-          addDebug('❌ Courses fetch error: ' + courseError.message, true);
-          throw courseError;
+          console.error('❌ Courses fetch error:', courseError);
+        } else {
+          console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
         }
-        
-        addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
         setCourses(coursesData || []);
-        
-        // Auto-select first course if available
-        if (coursesData && coursesData.length > 0) {
-          setSelectedCourse(coursesData[0].id);
-        }
       } else {
-        addDebug('⚠️ No enrolled courses found');
+        console.log('⚠️ No enrolled courses found');
         setCourses([]);
-        setMessage('ℹ️ You are not enrolled in any courses. Please contact your lecturer.');
-        setMessageType('info');
       }
-    } catch (error) {
-      addDebug('❌ Error fetching courses: ' + error.message, true);
-      setMessage('❌ Error loading courses. Please refresh.');
-      setMessageType('danger');
-    }
-  };
 
-  const fetchTodayAttendance = async () => {
-    try {
-      addDebug('🔵 Fetching today\'s attendance...');
+      // 3. Calculate statistics
+      const uniqueAttendance = attendanceData || [];
+      const presentCount = uniqueAttendance.filter(a => a.status === 'present').length;
+      const totalClasses = uniqueAttendance.length;
+      const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
+
+      // 4. Get today's attendance
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
-      const { data, error } = await supabase
-        .from('attendance')
-        .select('course_id')
-        .eq('student_id', user.id)
-        .gte('date', today.toISOString());
-
-      if (error) {
-        addDebug('❌ Attendance fetch error: ' + error.message, true);
-        throw error;
-      }
+      const todayAttendance = uniqueAttendance.filter(a => new Date(a.date) >= today);
+      const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       
-      const marked = (data || []).map(a => a.course_id);
-      setTodayAttendance(marked);
-      addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
-    } catch (error) {
-      addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
-    }
-  };
-
-  const handleMarkAttendance = async () => {
-    if (!selectedCourse) {
-      setMessage('⚠️ Please select a course.');
-      setMessageType('warning');
-      return;
-    }
-
-    if (!modelsReady) {
-      setMessage('⚠️ Face recognition models are still loading. Please wait.');
-      setMessageType('warning');
-      return;
-    }
-
-    if (!webcamStarted) {
-      setMessage('⚠️ Webcam not ready. Please refresh the page.');
-      setMessageType('warning');
-      return;
-    }
-
-    setIsMarking(true);
-    setMessage('');
-    setMessageType('');
-    setFaceMatched(false);
-    addDebug('📸 Starting attendance marking for course: ' + selectedCourse);
-
-    try {
-      // 1. Get live face descriptor
-      addDebug('📸 Capturing face...');
-      const liveDescriptor = await getFaceDescriptor(videoRef.current);
-      if (!liveDescriptor) {
-        setMessage('❌ No face detected. Please look straight at the camera and try again.');
-        setMessageType('danger');
-        addDebug('❌ No face detected');
-        setIsMarking(false);
-        return;
+      // 5. Get today's courses (distinct)
+      const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
+      let todayCoursesData = [];
+      if (todayCourseIds.length > 0) {
+        const { data: data } = await supabase
+          .from('courses')
+          .select('*')
+          .in('id', todayCourseIds);
+        todayCoursesData = data || [];
       }
-      addDebug('✅ Face captured');
+      setTodayCourses(todayCoursesData);
 
-      // 2. Fetch stored face descriptors for this student
-      addDebug('🔵 Fetching stored face descriptors...');
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('face_descriptors')
-        .eq('id', user.id)
-        .single();
-
-      if (userError) {
-        addDebug('❌ User fetch error: ' + userError.message, true);
-        throw userError;
-      }
-
-      const storedDescriptors = userData.face_descriptors || [];
-      addDebug(`📋 Found ${storedDescriptors.length} stored face samples`);
-      
-      if (storedDescriptors.length === 0) {
-        setMessage('❌ No face samples found. Please re-register with face enrolment.');
-        setMessageType('danger');
-        addDebug('❌ No face samples found');
-        setIsMarking(false);
-        return;
-      }
-
-      // 3. Compare live face with stored descriptors
-      addDebug('🔍 Comparing faces...');
-      let matched = false;
-      for (let i = 0; i < storedDescriptors.length; i++) {
-        if (compareDescriptors(liveDescriptor, storedDescriptors[i], 0.6)) {
-          matched = true;
-          setFaceMatched(true);
-          addDebug(`✅ Face matched with sample ${i + 1}`);
-          break;
-        }
-      }
-
-      if (!matched) {
-        setMessage('❌ Face does not match your registered profile. Please try again.');
-        setMessageType('danger');
-        addDebug('❌ Face did not match any stored sample');
-        setIsMarking(false);
-        return;
-      }
-
-      // 4. Check if already marked for this course today
-      if (todayAttendance.includes(selectedCourse)) {
-        setMessage('⚠️ You have already marked attendance for this course today.');
-        setMessageType('warning');
-        addDebug('⚠️ Already marked today');
-        setIsMarking(false);
-        return;
-      }
-
-      // 5. Insert attendance record
-      addDebug('💾 Saving attendance record...');
-      const { error: insertError } = await supabase
-        .from('attendance')
-        .insert({
-          student_id: user.id,
-          course_id: selectedCourse,
-          status: 'present'
-        });
-
-      if (insertError) {
-        addDebug('❌ Insert error: ' + insertError.message, true);
-        throw insertError;
-      }
-
-      // 6. Update today's attendance list
-      setTodayAttendance(prev => [...prev, selectedCourse]);
-      addDebug('✅ Attendance saved successfully');
-
-      setMessage('✅ Attendance marked successfully! ✓');
-      setMessageType('success');
-
-      const course = courses.find(c => c.id === selectedCourse);
-      if (course) {
-        addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
-      }
+      setStats({
+        totalPresent: presentCount,
+        totalCourses: enrolledIds.length,
+        attendancePercentage: percentage,
+        todayPresent: todayPresent
+      });
 
     } catch (error) {
-      addDebug('❌ Error marking attendance: ' + error.message, true);
-      setMessage('❌ Error marking attendance. Please try again.');
-      setMessageType('danger');
+      console.error('❌ Error fetching data:', error);
+    } finally {
+      setLoading(false);
     }
-
-    setIsMarking(false);
   };
 
-  const isCourseMarked = (courseId) => {
-    return todayAttendance.includes(courseId);
+  // Group attendance by course
+  const getAttendanceByCourse = () => {
+    const courseMap = {};
+    attendance.forEach(record => {
+      const courseId = record.course_id;
+      if (!courseMap[courseId]) {
+        courseMap[courseId] = {
+          courseCode: record.course?.course_code || 'Unknown',
+          courseName: record.course?.course_name || 'Unknown',
+          present: 0,
+          total: 0
+        };
+      }
+      courseMap[courseId].total++;
+      if (record.status === 'present') {
+        courseMap[courseId].present++;
+      }
+    });
+    return Object.values(courseMap);
   };
 
-  // Get selected course details
-  const getSelectedCourseDetails = () => {
-    return courses.find(c => c.id === selectedCourse);
+  const courseStats = getAttendanceByCourse();
+
+  // Get filtered attendance for selected course
+  const getFilteredAttendance = () => {
+    if (!selectedCourse) return attendance;
+    return attendance.filter(a => a.course_id === selectedCourse);
   };
+
+  const filteredAttendance = getFilteredAttendance();
+
+  if (loading) {
+    return (
+      <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
+        <Spinner animation="border" variant="primary" />
+      </Container>
+    );
+  }
 
   return (
     <Container className="mt-4">
       <div className="animate-fade-in">
-        <h2 className="mb-4">📷 Mark Attendance</h2>
+        <h2 className="mb-4">👋 Welcome, {user?.full_name}</h2>
 
-        {/* Debug Panel - Hidden by default, can be shown if needed */}
-        <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #ddd', display: 'none' }}>
-          <h6 className="mb-1">🔍 Debug Log</h6>
-          <div style={{ maxHeight: '80px', overflowY: 'auto', fontSize: '10px', fontFamily: 'monospace' }}>
-            {debugMessages.slice(-5).map((msg, idx) => (
-              <div key={idx} style={{ color: msg.isError ? '#dc3545' : '#28a745' }}>
-                <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Row>
-          {/* Camera Section - Left Side */}
-          <Col md={7}>
-            <Card className="p-3 shadow-lg">
-              <h5 className="mb-3">📹 Live Camera</h5>
-              <div className="video-container bg-dark rounded" style={{ position: 'relative', overflow: 'hidden' }}>
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  muted
-                  playsInline
-                  className="w-100"
-                  style={{ maxHeight: '400px', minHeight: '300px' }}
-                />
-                {/* Face Match Indicator */}
-                {faceMatched && (
-                  <div style={{
-                    position: 'absolute',
-                    bottom: '20px',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    background: 'rgba(0, 255, 0, 0.8)',
-                    padding: '8px 20px',
-                    borderRadius: '20px',
-                    color: '#fff',
-                    fontWeight: 'bold'
-                  }}>
-                    ✅ Face Verified!
-                  </div>
-                )}
-              </div>
-              <div className="mt-2 d-flex justify-content-between">
-                <small className="text-muted">
-                  {modelsReady ? '✅ Models loaded' : modelsLoading ? '⏳ Loading models...' : '❌ Models failed'}
-                </small>
-                <small className="text-muted">
-                  {webcamStarted ? '✅ Webcam active' : '⏳ Starting webcam...'}
-                </small>
-              </div>
+        {/* Statistics Cards */}
+        <Row className="mb-4">
+          <Col md={3}>
+            <Card className="stat-card">
+              <h2>{stats.totalPresent}</h2>
+              <p>📋 Total Present</p>
             </Card>
           </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
+              <h2>{stats.totalCourses}</h2>
+              <p>📚 Enrolled Courses</p>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
+              <h2>{stats.attendancePercentage}%</h2>
+              <p>📈 Attendance Rate</p>
+            </Card>
+          </Col>
+          <Col md={3}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
+              <h2>{stats.todayPresent}</h2>
+              <p>✅ Today Present</p>
+            </Card>
+          </Col>
+        </Row>
 
-          {/* Controls Section - Right Side */}
-          <Col md={5}>
-            <Card className="p-3 shadow-lg">
-              <h5 className="mb-3">📚 Select Course</h5>
-
-              {message && (
-                <Alert 
-                  variant={messageType || 'info'} 
-                  className="mb-3"
-                  onClose={() => { setMessage(''); setMessageType(''); }}
-                  dismissible
-                >
-                  {message}
+        {/* Today's Courses Section - FIXED STYLING */}
+        <Row className="mb-4">
+          <Col md={12}>
+            <Card className="p-3">
+              <h5 className="mb-3">📅 Today's Attended Courses</h5>
+              {todayCourses.length === 0 ? (
+                <Alert variant="info">
+                  You haven't attended any courses today.
                 </Alert>
+              ) : (
+                <div className="d-flex flex-wrap gap-2" style={{ maxWidth: '100%' }}>
+                  {todayCourses.map((course) => (
+                    <Badge 
+                      key={course.id} 
+                      bg="success" 
+                      className="p-2"
+                      style={{ 
+                        fontSize: '0.9rem', 
+                        maxWidth: '100%',
+                        whiteSpace: 'normal',
+                        wordBreak: 'break-word'
+                      }}
+                    >
+                      ✅ {course.course_code} - {course.course_name}
+                    </Badge>
+                  ))}
+                </div>
               )}
+            </Card>
+          </Col>
+        </Row>
 
+        {/* My Courses Section - Dropdown */}
+        <Row className="mb-4">
+          <Col md={12}>
+            <Card className="p-3">
+              <h5 className="mb-3">📚 My Enrolled Courses ({courses.length})</h5>
               {courses.length === 0 ? (
                 <Alert variant="info">
-                  You are not enrolled in any courses yet.<br />
-                  <small>Please contact your lecturer or admin.</small>
+                  You are not enrolled in any courses yet. Please contact your lecturer or admin.
                 </Alert>
               ) : (
                 <>
                   <Form.Group className="mb-3">
-                    <Form.Label>Select a course:</Form.Label>
+                    <Form.Label>Select a course to view details:</Form.Label>
                     <Form.Select
                       value={selectedCourse}
                       onChange={(e) => setSelectedCourse(e.target.value)}
-                      disabled={isMarking}
-                      style={{ fontSize: '1rem', padding: '10px' }}
                     >
+                      <option value="">-- All Courses --</option>
                       {courses.map((course) => (
                         <option key={course.id} value={course.id}>
                           {course.course_code} - {course.course_name}
-                          {isCourseMarked(course.id) ? ' ✅' : ''}
                         </option>
                       ))}
                     </Form.Select>
                   </Form.Group>
 
-                  {/* Selected Course Info */}
-                  {getSelectedCourseDetails() && (
-                    <div className="p-2 bg-light rounded mb-3">
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div>
-                          <strong>{getSelectedCourseDetails().course_code}</strong>
-                          <br />
-                          <small className="text-muted">{getSelectedCourseDetails().course_name}</small>
-                          <br />
-                          <small className="text-muted">Lecturer: {getSelectedCourseDetails().lecturer || 'N/A'}</small>
-                        </div>
-                        <div>
-                          {isCourseMarked(selectedCourse) ? (
-                            <Badge bg="success" className="p-2">
-                              ✅ Marked Today
-                            </Badge>
-                          ) : (
-                            <Badge bg="secondary" className="p-2">
-                              ⏳ Not Marked
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Mark Present Button */}
-                  <Button
-                    variant="success"
-                    onClick={handleMarkAttendance}
-                    disabled={isMarking || !modelsReady || modelsLoading || !selectedCourse || isCourseMarked(selectedCourse)}
-                    className="w-100"
-                    size="lg"
-                    style={{ padding: '15px', fontSize: '1.2rem' }}
-                  >
-                    {isMarking ? (
-                      <>
-                        <Spinner animation="border" size="sm" className="me-2" />
-                        Verifying Face...
-                      </>
-                    ) : isCourseMarked(selectedCourse) ? (
-                      '✅ Already Marked Today'
-                    ) : (
-                      '📸 Mark Present'
-                    )}
-                  </Button>
-
-                  {/* Today's Summary */}
-                  <div className="mt-3 p-2 bg-light rounded">
-                    <small className="text-muted">
-                      ✅ Today's Progress: <strong>{todayAttendance.length}</strong> / <strong>{courses.length}</strong> courses marked
-                    </small>
+                  {/* Course Details Table */}
+                  <div className="table-container">
+                    <Table striped bordered hover responsive>
+                      <thead>
+                        <tr>
+                          <th>Course Code</th>
+                          <th>Course Name</th>
+                          <th>Lecturer</th>
+                          <th>Present</th>
+                          <th>Total Classes</th>
+                          <th>Percentage</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {courseStats
+                          .filter(c => !selectedCourse || c.courseCode === courses.find(c => c.id === selectedCourse)?.course_code)
+                          .map((course, index) => {
+                            const percentage = course.total > 0 
+                              ? Math.round((course.present / course.total) * 100) 
+                              : 0;
+                            return (
+                              <tr key={index}>
+                                <td><strong>{course.courseCode}</strong></td>
+                                <td>{course.courseName}</td>
+                                <td>{courses.find(c => c.course_code === course.courseCode)?.lecturer || 'N/A'}</td>
+                                <td>{course.present}</td>
+                                <td>{course.total}</td>
+                                <td>
+                                  <Badge 
+                                    bg={percentage >= 75 ? 'success' : percentage >= 50 ? 'warning' : 'danger'}
+                                    className="px-3 py-2"
+                                  >
+                                    {percentage}%
+                                  </Badge>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        {selectedCourse && courseStats.filter(c => c.courseCode === courses.find(c => c.id === selectedCourse)?.course_code).length === 0 && (
+                          <tr>
+                            <td colSpan="6" className="text-center text-muted">
+                              No attendance records for this course yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </Table>
                   </div>
                 </>
               )}
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Recent Attendance History */}
+        <Row>
+          <Col md={12}>
+            <Card className="p-3">
+              <h5 className="mb-3">🕐 Recent Attendance History</h5>
+              <div className="table-container">
+                <Table striped bordered hover responsive>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Course</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attendance.length === 0 ? (
+                      <tr>
+                        <td colSpan="3" className="text-center text-muted">
+                          No attendance records yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      (selectedCourse ? filteredAttendance : attendance).slice(0, 20).map((record) => (
+                        <tr key={record.id}>
+                          <td>{new Date(record.date).toLocaleString()}</td>
+                          <td>{record.course?.course_code} - {record.course?.course_name}</td>
+                          <td>
+                            <Badge bg="success" className="px-3 py-2">
+                              ✅ Present
+                            </Badge>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
             </Card>
           </Col>
         </Row>
@@ -449,4 +341,4 @@ const MarkAttendance = () => {
   );
 };
 
-export default MarkAttendance;
+export default StudentDashboard;
