@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../utils/supabaseClient';
 import { loadModels, getFaceDescriptor, compareDescriptors } from '../../utils/faceUtils';
-import { Container, Row, Col, Card, Button, Alert, Spinner, ListGroup, Badge } from 'react-bootstrap';
+import { Container, Row, Col, Card, Button, Alert, Spinner, Form, Badge } from 'react-bootstrap';
 
 const MarkAttendance = () => {
   const [courses, setCourses] = useState([]);
-  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [selectedCourse, setSelectedCourse] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
@@ -15,6 +15,7 @@ const MarkAttendance = () => {
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [todayAttendance, setTodayAttendance] = useState([]);
   const [debugMessages, setDebugMessages] = useState([]);
+  const [faceMatched, setFaceMatched] = useState(false);
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -89,9 +90,10 @@ const MarkAttendance = () => {
         throw userError;
       }
 
-      const enrolledIds = userData?.enrolled_courses || [];
+      // Remove duplicates
+      let enrolledIds = userData?.enrolled_courses || [];
+      enrolledIds = [...new Set(enrolledIds)];
       addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
-      addDebug(`📋 IDs: ${JSON.stringify(enrolledIds)}`);
 
       if (enrolledIds.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
@@ -105,10 +107,12 @@ const MarkAttendance = () => {
         }
         
         addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
-        if (coursesData?.length > 0) {
-          addDebug(`📋 Courses: ${coursesData.map(c => c.course_code).join(', ')}`);
-        }
         setCourses(coursesData || []);
+        
+        // Auto-select first course if available
+        if (coursesData && coursesData.length > 0) {
+          setSelectedCourse(coursesData[0].id);
+        }
       } else {
         addDebug('⚠️ No enrolled courses found');
         setCourses([]);
@@ -147,7 +151,13 @@ const MarkAttendance = () => {
     }
   };
 
-  const handleMarkAttendance = async (courseId) => {
+  const handleMarkAttendance = async () => {
+    if (!selectedCourse) {
+      setMessage('⚠️ Please select a course.');
+      setMessageType('warning');
+      return;
+    }
+
     if (!modelsReady) {
       setMessage('⚠️ Face recognition models are still loading. Please wait.');
       setMessageType('warning');
@@ -163,7 +173,8 @@ const MarkAttendance = () => {
     setIsMarking(true);
     setMessage('');
     setMessageType('');
-    addDebug('📸 Starting attendance marking for course: ' + courseId);
+    setFaceMatched(false);
+    addDebug('📸 Starting attendance marking for course: ' + selectedCourse);
 
     try {
       // 1. Get live face descriptor
@@ -208,13 +219,14 @@ const MarkAttendance = () => {
       for (let i = 0; i < storedDescriptors.length; i++) {
         if (compareDescriptors(liveDescriptor, storedDescriptors[i], 0.6)) {
           matched = true;
+          setFaceMatched(true);
           addDebug(`✅ Face matched with sample ${i + 1}`);
           break;
         }
       }
 
       if (!matched) {
-        setMessage('❌ Face does not match your registered profile. Please try again or contact admin.');
+        setMessage('❌ Face does not match your registered profile. Please try again.');
         setMessageType('danger');
         addDebug('❌ Face did not match any stored sample');
         setIsMarking(false);
@@ -222,7 +234,7 @@ const MarkAttendance = () => {
       }
 
       // 4. Check if already marked for this course today
-      if (todayAttendance.includes(courseId)) {
+      if (todayAttendance.includes(selectedCourse)) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
         addDebug('⚠️ Already marked today');
@@ -236,7 +248,7 @@ const MarkAttendance = () => {
         .from('attendance')
         .insert({
           student_id: user.id,
-          course_id: courseId,
+          course_id: selectedCourse,
           status: 'present'
         });
 
@@ -246,17 +258,16 @@ const MarkAttendance = () => {
       }
 
       // 6. Update today's attendance list
-      setTodayAttendance(prev => [...prev, courseId]);
+      setTodayAttendance(prev => [...prev, selectedCourse]);
       addDebug('✅ Attendance saved successfully');
 
       setMessage('✅ Attendance marked successfully! ✓');
       setMessageType('success');
 
-      const course = courses.find(c => c.id === courseId);
+      const course = courses.find(c => c.id === selectedCourse);
       if (course) {
         addDebug(`✅ ${course.course_code} - ${course.course_name} marked present`);
       }
-      setSelectedCourse(null);
 
     } catch (error) {
       addDebug('❌ Error marking attendance: ' + error.message, true);
@@ -271,45 +282,58 @@ const MarkAttendance = () => {
     return todayAttendance.includes(courseId);
   };
 
+  // Get selected course details
+  const getSelectedCourseDetails = () => {
+    return courses.find(c => c.id === selectedCourse);
+  };
+
   return (
     <Container className="mt-4">
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
 
-        {/* Debug Panel */}
-        <Card className="mb-3 p-3" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
-          <h6 className="mb-2">🔍 Debug Log</h6>
-          <div style={{ maxHeight: '100px', overflowY: 'auto', fontSize: '12px', fontFamily: 'monospace' }}>
-            {debugMessages.length === 0 ? (
-              <div className="text-muted">Initializing...</div>
-            ) : (
-              debugMessages.map((msg, idx) => (
-                <div key={idx} style={{ 
-                  color: msg.isError ? '#dc3545' : '#28a745',
-                  borderBottom: '1px solid #e9ecef',
-                  padding: '2px 0'
-                }}>
-                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
-                </div>
-              ))
-            )}
+        {/* Debug Panel - Hidden by default, can be shown if needed */}
+        <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '1px solid #ddd', display: 'none' }}>
+          <h6 className="mb-1">🔍 Debug Log</h6>
+          <div style={{ maxHeight: '80px', overflowY: 'auto', fontSize: '10px', fontFamily: 'monospace' }}>
+            {debugMessages.slice(-5).map((msg, idx) => (
+              <div key={idx} style={{ color: msg.isError ? '#dc3545' : '#28a745' }}>
+                <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+              </div>
+            ))}
           </div>
         </Card>
 
         <Row>
-          {/* Camera Section */}
-          <Col md={6}>
+          {/* Camera Section - Left Side */}
+          <Col md={7}>
             <Card className="p-3 shadow-lg">
-              <h5 className="mb-3">Live Camera</h5>
-              <div className="video-container bg-dark rounded">
+              <h5 className="mb-3">📹 Live Camera</h5>
+              <div className="video-container bg-dark rounded" style={{ position: 'relative', overflow: 'hidden' }}>
                 <video
                   ref={videoRef}
                   autoPlay
                   muted
                   playsInline
                   className="w-100"
-                  style={{ maxHeight: '350px' }}
+                  style={{ maxHeight: '400px', minHeight: '300px' }}
                 />
+                {/* Face Match Indicator */}
+                {faceMatched && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '20px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(0, 255, 0, 0.8)',
+                    padding: '8px 20px',
+                    borderRadius: '20px',
+                    color: '#fff',
+                    fontWeight: 'bold'
+                  }}>
+                    ✅ Face Verified!
+                  </div>
+                )}
               </div>
               <div className="mt-2 d-flex justify-content-between">
                 <small className="text-muted">
@@ -322,10 +346,10 @@ const MarkAttendance = () => {
             </Card>
           </Col>
 
-          {/* Course Selection Section */}
-          <Col md={6}>
+          {/* Controls Section - Right Side */}
+          <Col md={5}>
             <Card className="p-3 shadow-lg">
-              <h5 className="mb-3">📚 Select Course ({courses.length} available)</h5>
+              <h5 className="mb-3">📚 Select Course</h5>
 
               {message && (
                 <Alert 
@@ -340,83 +364,82 @@ const MarkAttendance = () => {
 
               {courses.length === 0 ? (
                 <Alert variant="info">
-                  You are not enrolled in any courses yet.
+                  You are not enrolled in any courses yet.<br />
+                  <small>Please contact your lecturer or admin.</small>
                 </Alert>
               ) : (
-                <ListGroup className="mb-3">
-                  {courses.map((course) => (
-                    <ListGroup.Item
-                      key={course.id}
-                      action
-                      onClick={() => setSelectedCourse(course)}
-                      active={selectedCourse?.id === course.id}
-                      className="d-flex justify-content-between align-items-center"
+                <>
+                  <Form.Group className="mb-3">
+                    <Form.Label>Select a course:</Form.Label>
+                    <Form.Select
+                      value={selectedCourse}
+                      onChange={(e) => setSelectedCourse(e.target.value)}
+                      disabled={isMarking}
+                      style={{ fontSize: '1rem', padding: '10px' }}
                     >
-                      <div>
-                        <strong>{course.course_code}</strong>
-                        <br />
-                        <small className="text-muted">{course.course_name}</small>
-                      </div>
-                      {isCourseMarked(course.id) && (
-                        <Badge bg="success" pill>
-                          ✅ Marked Today
-                        </Badge>
-                      )}
-                    </ListGroup.Item>
-                  ))}
-                </ListGroup>
-              )}
+                      {courses.map((course) => (
+                        <option key={course.id} value={course.id}>
+                          {course.course_code} - {course.course_name}
+                          {isCourseMarked(course.id) ? ' ✅' : ''}
+                        </option>
+                      ))}
+                    </Form.Select>
+                  </Form.Group>
 
-              {selectedCourse && (
-                <div className="mt-2">
-                  <div className="p-2 bg-light rounded mb-3">
-                    <strong>Selected:</strong> {selectedCourse.course_code} - {selectedCourse.course_name}
-                  </div>
+                  {/* Selected Course Info */}
+                  {getSelectedCourseDetails() && (
+                    <div className="p-2 bg-light rounded mb-3">
+                      <div className="d-flex justify-content-between align-items-center">
+                        <div>
+                          <strong>{getSelectedCourseDetails().course_code}</strong>
+                          <br />
+                          <small className="text-muted">{getSelectedCourseDetails().course_name}</small>
+                          <br />
+                          <small className="text-muted">Lecturer: {getSelectedCourseDetails().lecturer || 'N/A'}</small>
+                        </div>
+                        <div>
+                          {isCourseMarked(selectedCourse) ? (
+                            <Badge bg="success" className="p-2">
+                              ✅ Marked Today
+                            </Badge>
+                          ) : (
+                            <Badge bg="secondary" className="p-2">
+                              ⏳ Not Marked
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mark Present Button */}
                   <Button
                     variant="success"
-                    onClick={() => handleMarkAttendance(selectedCourse.id)}
-                    disabled={isMarking || isCourseMarked(selectedCourse.id) || !modelsReady || modelsLoading}
+                    onClick={handleMarkAttendance}
+                    disabled={isMarking || !modelsReady || modelsLoading || !selectedCourse || isCourseMarked(selectedCourse)}
                     className="w-100"
                     size="lg"
+                    style={{ padding: '15px', fontSize: '1.2rem' }}
                   >
                     {isMarking ? (
                       <>
                         <Spinner animation="border" size="sm" className="me-2" />
                         Verifying Face...
                       </>
-                    ) : isCourseMarked(selectedCourse.id) ? (
+                    ) : isCourseMarked(selectedCourse) ? (
                       '✅ Already Marked Today'
                     ) : (
                       '📸 Mark Present'
                     )}
                   </Button>
-                </div>
-              )}
-            </Card>
-          </Col>
-        </Row>
 
-        {/* Today's Summary */}
-        <Row className="mt-4">
-          <Col md={12}>
-            <Card className="p-3 shadow-sm">
-              <h5 className="mb-3">Today's Attendance Summary</h5>
-              {todayAttendance.length === 0 ? (
-                <p className="text-muted">No attendance marked today yet.</p>
-              ) : (
-                <div>
-                  <p>✅ You have marked <strong>{todayAttendance.length}</strong> course(s) today:</p>
-                  <div className="d-flex flex-wrap gap-2">
-                    {todayAttendance.map((courseId) => {
-                      const course = courses.find(c => c.id === courseId);
-                      return course ? (
-                        <Badge key={courseId} bg="success" className="p-2">
-                          {course.course_code}
-                        </Badge>
-                      ) : null;
-                    })}
+                  {/* Today's Summary */}
+                  <div className="mt-3 p-2 bg-light rounded">
+                    <small className="text-muted">
+                      ✅ Today's Progress: <strong>{todayAttendance.length}</strong> / <strong>{courses.length}</strong> courses marked
+                    </small>
                   </div>
-                </div>
+                </>
               )}
             </Card>
           </Col>
