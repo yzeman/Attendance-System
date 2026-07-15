@@ -4,10 +4,6 @@ import {
   Container, Row, Col, Card, Table, Button, Form, 
   Badge, Alert, Spinner, Modal, Tab, Tabs 
 } from 'react-bootstrap';
-import { Bar, Doughnut } from 'react-chartjs-2';
-import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement } from 'chart.js';
-
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 const AdminDashboard = () => {
   // State variables
