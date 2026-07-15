@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { Container, Row, Col, Card, Badge, Spinner, Alert, Form, Button } from 'react-bootstrap';
+import { Container, Row, Col, Card, Badge, Spinner, Alert, Form } from 'react-bootstrap';
 
 const MyCourses = () => {
   const [courses, setCourses] = useState([]);
@@ -16,7 +16,7 @@ const MyCourses = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. Get student's enrolled course IDs and semester preference
+      // Get student's enrolled course IDs and semester preference
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses, semester_preference')
@@ -27,11 +27,9 @@ const MyCourses = () => {
 
       setEnrolledCourses(userData?.enrolled_courses || []);
       
-      // Set semester preference (default to 'First')
       const pref = userData?.semester_preference || 'First';
       setSemesterPreference(pref);
 
-      // 2. Fetch course details for enrolled courses
       if (userData?.enrolled_courses?.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
           .from('courses')
@@ -54,7 +52,6 @@ const MyCourses = () => {
   const handleSemesterSwitch = async (semester) => {
     setSemesterPreference(semester);
     
-    // Save to database
     try {
       const { error } = await supabase
         .from('users')
@@ -63,7 +60,6 @@ const MyCourses = () => {
 
       if (error) throw error;
       
-      // Update local storage
       const updatedUser = { ...user, semester_preference: semester };
       localStorage.setItem('user', JSON.stringify(updatedUser));
 
@@ -72,7 +68,6 @@ const MyCourses = () => {
     }
   };
 
-  // Filter courses by selected semester
   const filteredCourses = courses.filter(c => c.semester === semesterPreference);
 
   if (loading) {
@@ -116,7 +111,6 @@ const MyCourses = () => {
               const isAttendanceOn = course.attendance_enabled !== false;
               const isActive = course.is_active !== false;
               
-              // Determine status message
               let statusMessage = '';
               let statusColor = '';
               let statusBadge = '';
@@ -186,7 +180,6 @@ const MyCourses = () => {
           </Row>
         )}
 
-        {/* Summary */}
         <Card className="mt-4 p-3 shadow-sm" style={{ borderRadius: '15px' }}>
           <h6>📊 Summary</h6>
           <Row>
