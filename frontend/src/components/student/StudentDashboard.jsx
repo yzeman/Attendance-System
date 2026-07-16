@@ -27,7 +27,7 @@ const StudentDashboard = () => {
     setLoading(true);
     try {
       console.log('🔵 Student: Fetching data for:', user?.email);
-      
+
       // 1. Get student's enrolled courses and semester preference
       const { data: userData, error: userError } = await supabase
         .from('users')
@@ -41,7 +41,7 @@ const StudentDashboard = () => {
         console.log('✅ User data fetched:', userData);
       }
 
-      // 2. Get admin's semester preference (only to check if second semester is available)
+      // 2. Get admin's semester preference
       const { data: adminData, error: adminError } = await supabase
         .from('users')
         .select('semester_preference')
@@ -49,36 +49,38 @@ const StudentDashboard = () => {
         .limit(1)
         .single();
 
-      let adminSecondSemesterEnabled = false;
+      let adminPref = 'First';
       if (!adminError && adminData) {
-        adminSecondSemesterEnabled = adminData.semester_preference === 'Second';
+        adminPref = adminData.semester_preference || 'First';
       }
-      setSecondSemesterEnabled(adminSecondSemesterEnabled);
+      setSecondSemesterEnabled(adminPref === 'Second');
 
-      // 3. Get student's semester preference - THIS IS THE SOURCE OF TRUTH
+      // 3. Get student's semester preference from database - THIS IS THE SOURCE OF TRUTH
       let studentPref = userData?.semester_preference || 'First';
       
-      // ✅ FIX: If student prefers Second but admin has it OFF, force to First
-      if (studentPref === 'Second' && !adminSecondSemesterEnabled) {
+      // If student prefers Second but admin has it OFF, force to First
+      if (studentPref === 'Second' && adminPref !== 'Second') {
         studentPref = 'First';
-        // Update student's preference to match
         await supabase
           .from('users')
           .update({ semester_preference: 'First' })
           .eq('id', user.id);
-        
-        const updatedUser = { ...user, semester_preference: 'First' };
-        localStorage.setItem('user', JSON.stringify(updatedUser));
       }
       
       setSemesterPreference(studentPref);
 
-      // 4. Remove duplicates from enrolled_courses
+      // 4. Update localStorage to match database
+      const storedUser = JSON.parse(localStorage.getItem('user'));
+      if (storedUser && storedUser.semester_preference !== studentPref) {
+        const updatedUser = { ...storedUser, semester_preference: studentPref };
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+      }
+
+      // 5. Remove duplicates from enrolled_courses
       let enrolledIds = userData?.enrolled_courses || [];
       enrolledIds = [...new Set(enrolledIds)];
-      console.log('🔵 Unique enrolled course IDs:', enrolledIds);
 
-      // 5. Fetch courses
+      // 6. Fetch courses
       let coursesData = [];
       if (enrolledIds.length > 0) {
         const { data: data, error: courseError } = await supabase
@@ -98,7 +100,7 @@ const StudentDashboard = () => {
         setCourses([]);
       }
 
-      // 6. Fetch student's attendance records
+      // 7. Fetch student's attendance records
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
         .select('*, course:course_id(course_code, course_name)')
@@ -112,28 +114,28 @@ const StudentDashboard = () => {
       }
       setAttendance(attendanceData || []);
 
-      // 7. Filter courses by student's selected semester
+      // 8. Filter courses by student's selected semester
       const filteredCourseIds = coursesData
         .filter(c => c.semester === studentPref)
         .map(c => c.id);
 
-      // 8. Filter attendance by student's selected semester
+      // 9. Filter attendance by student's selected semester
       const filteredAttendance = (attendanceData || []).filter(a => 
         filteredCourseIds.includes(a.course_id)
       );
 
-      // 9. Calculate statistics
+      // 10. Calculate statistics
       const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
       const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
 
-      // 10. Get today's attendance (filtered by semester)
+      // 11. Get today's attendance (filtered by semester)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayAttendance = filteredAttendance.filter(a => new Date(a.date) >= today);
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       
-      // 11. Get today's courses (distinct)
+      // 12. Get today's courses (distinct)
       const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
       let todayCoursesData = [];
       if (todayCourseIds.length > 0) {
@@ -145,7 +147,7 @@ const StudentDashboard = () => {
       }
       setTodayCourses(todayCoursesData);
 
-      // 12. Get today's absent courses (only active courses in current semester)
+      // 13. Get today's absent courses (only active courses in current semester)
       const allActiveCourseIds = coursesData
         .filter(c => c.semester === studentPref && c.is_active !== false && c.attendance_enabled !== false)
         .map(c => c.id);
@@ -229,9 +231,6 @@ const StudentDashboard = () => {
           <h2>👋 Welcome, {user?.full_name}</h2>
           <Badge bg="primary" className="p-2" style={{ fontSize: '1rem' }}>
             📅 {semesterPreference} Semester
-            {semesterPreference === 'Second' && !secondSemesterEnabled && (
-              <span style={{ color: '#ffc107', marginLeft: '5px' }}>⚠️</span>
-            )}
           </Badge>
         </div>
 
@@ -332,7 +331,7 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* My Courses Section - Shows current semester courses only */}
+        {/* My Courses Section */}
         <Row className="mb-4">
           <Col md={12}>
             <Card className="p-3">
@@ -364,7 +363,6 @@ const StudentDashboard = () => {
                     </Form.Select>
                   </Form.Group>
 
-                  {/* Course Details Table */}
                   <div className="table-container">
                     <Table striped bordered hover responsive>
                       <thead>
@@ -418,7 +416,7 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* Recent Attendance History - Shows current semester only */}
+        {/* Recent Attendance History */}
         <Row>
           <Col md={12}>
             <Card className="p-3">
