@@ -14,8 +14,7 @@ const MarkAttendance = () => {
   const [modelsLoading, setModelsLoading] = useState(true);
   const [webcamStarted, setWebcamStarted] = useState(false);
   const [todayAttendance, setTodayAttendance] = useState([]);
-  const [todayAbsent, setTodayAbsent] = useState([]);
-  const [lecturingCourses, setLecturingCourses] = useState([]);
+  const [courseStatuses, setCourseStatuses] = useState({});
   const [debugMessages, setDebugMessages] = useState([]);
   const [faceMatched, setFaceMatched] = useState(false);
   const videoRef = useRef(null);
@@ -38,8 +37,7 @@ const MarkAttendance = () => {
       await startWebcam();
       await fetchCourses();
       await fetchTodayAttendance();
-      await checkLecturingCourses();
-      await markAbsentForOffCourses();
+      await fetchCourseStatuses();
       
       addDebug('✅ Initialization complete');
     };
@@ -126,7 +124,7 @@ const MarkAttendance = () => {
 
       const { data, error } = await supabase
         .from('attendance')
-        .select('course_id')
+        .select('course_id, status')
         .eq('student_id', user.id)
         .gte('date', today.toISOString());
 
@@ -135,87 +133,100 @@ const MarkAttendance = () => {
         throw error;
       }
       
-      const marked = (data || []).map(a => a.course_id);
-      setTodayAttendance(marked);
-      addDebug(`✅ Today's attendance: ${marked.length} course(s)`);
+      const presentCourses = (data || []).filter(a => a.status === 'present').map(a => a.course_id);
+      setTodayAttendance(presentCourses);
+      addDebug(`✅ Today's present: ${presentCourses.length} course(s)`);
       
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
   };
 
-  // Check which courses are currently lecturing (ON)
-  const checkLecturingCourses = () => {
-    const active = courses.filter(c => c.is_active !== false && c.attendance_enabled !== false);
-    setLecturingCourses(active);
-    addDebug(`📚 Lecturing courses: ${active.length} course(s)`);
-  };
-
-  // Mark absent for courses that are OFF and not marked
-  const markAbsentForOffCourses = async () => {
+  const fetchCourseStatuses = async () => {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      addDebug('🔵 Fetching course statuses for today...');
+      const today = new Date().toISOString().split('T')[0];
       
-      // Get all courses that are OFF or Inactive
-      const offCourses = courses.filter(c => c.is_active === false || c.attendance_enabled === false);
-      
-      for (let course of offCourses) {
-        // Check if already marked attendance today
-        const { data: existing } = await supabase
-          .from('attendance')
-          .select('id')
-          .eq('student_id', user.id)
-          .eq('course_id', course.id)
-          .gte('date', today.toISOString());
+      const { data, error } = await supabase
+        .from('course_schedule')
+        .select('course_id, is_active, turned_on_at, turned_off_at')
+        .eq('date', today);
 
-        if (!existing || existing.length === 0) {
-          // Mark as absent
-          const { error: insertError } = await supabase
-            .from('attendance')
-            .insert({
-              student_id: user.id,
-              course_id: course.id,
-              status: 'absent'
-            });
-
-          if (insertError) {
-            console.error('Error marking absent:', insertError);
-          } else {
-            addDebug(`✅ Marked absent for: ${course.course_code}`);
-          }
-        }
+      if (error) {
+        addDebug('❌ Course status fetch error: ' + error.message, true);
+        return;
       }
 
-      // Refresh today's attendance
-      await fetchTodayAttendance();
+      const statusMap = {};
+      data.forEach(record => {
+        statusMap[record.course_id] = {
+          is_active: record.is_active,
+          turned_on_at: record.turned_on_at,
+          turned_off_at: record.turned_off_at
+        };
+      });
+      setCourseStatuses(statusMap);
+      addDebug(`✅ Course statuses fetched: ${Object.keys(statusMap).length} course(s)`);
       
     } catch (error) {
-      addDebug('❌ Error marking absent: ' + error.message, true);
+      addDebug('❌ Error fetching course statuses: ' + error.message, true);
     }
   };
 
-  // Get courses with status
   const getCourseStatus = (course) => {
+    const status = courseStatuses[course.id];
+    const isMarked = todayAttendance.includes(course.id);
+    
+    // If course is inactive
     if (course.is_active === false) {
-      return { status: 'inactive', label: '⏳ Course Inactive', color: 'secondary' };
+      return { 
+        status: 'inactive', 
+        label: '⏳ Course Inactive', 
+        color: 'secondary',
+        canMark: false 
+      };
     }
+    
+    // If attendance is disabled (OFF)
     if (course.attendance_enabled === false) {
-      return { status: 'not_started', label: '⏳ Not Started', color: 'warning' };
+      // Check if it was ever turned ON today
+      if (status && status.turned_on_at) {
+        // It was turned ON at some point but now OFF
+        return { 
+          status: 'ended', 
+          label: '❌ Class Ended', 
+          color: 'danger',
+          canMark: false 
+        };
+      } else {
+        // Never turned ON today
+        return { 
+          status: 'not_started', 
+          label: '⏳ Not Started Yet', 
+          color: 'warning',
+          canMark: false 
+        };
+      }
     }
-    return { status: 'lecturing', label: '📖 Lecture in Progress', color: 'success' };
+    
+    // Course is ON (attendance_enabled = true)
+    if (status && status.is_active === true) {
+      return { 
+        status: 'lecturing', 
+        label: '📖 Lecture in Progress', 
+        color: 'success',
+        canMark: true 
+      };
+    }
+    
+    // Default: not started
+    return { 
+      status: 'not_started', 
+      label: '⏳ Not Started Yet', 
+      color: 'warning',
+      canMark: false 
+    };
   };
-
-  // Get only ACTIVE and ON courses (lecturing)
-  const activeCourses = courses.filter(c => c.is_active !== false && c.attendance_enabled !== false);
-  const offCourses = courses.filter(c => c.is_active === false || c.attendance_enabled === false);
-  
-  // Separate active courses into marked and unmarked
-  const markedActiveCourses = activeCourses.filter(c => todayAttendance.includes(c.id));
-  const unmarkedActiveCourses = activeCourses.filter(c => !todayAttendance.includes(c.id));
-
-  // Get absent courses (off or inactive)
-  const absentCourses = offCourses.filter(c => !todayAttendance.includes(c.id));
 
   const handleMarkAttendance = async () => {
     if (!selectedCourse) {
@@ -225,9 +236,10 @@ const MarkAttendance = () => {
     }
 
     const selectedCourseData = courses.find(c => c.id === selectedCourse);
+    const courseStatus = getCourseStatus(selectedCourseData);
     
-    if (!selectedCourseData || selectedCourseData.is_active === false || selectedCourseData.attendance_enabled === false) {
-      setMessage('⏳ This course is not currently lecturing.');
+    if (!courseStatus.canMark) {
+      setMessage(`⏳ This course is ${courseStatus.label.toLowerCase()}.`);
       setMessageType('warning');
       return;
     }
@@ -307,7 +319,7 @@ const MarkAttendance = () => {
         return;
       }
 
-      // Check if already marked (double-check)
+      // Double check if already marked
       if (todayAttendance.includes(selectedCourse)) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
@@ -318,50 +330,26 @@ const MarkAttendance = () => {
 
       // Check if course is still ON
       const currentCourse = courses.find(c => c.id === selectedCourse);
-      if (!currentCourse || currentCourse.is_active === false || currentCourse.attendance_enabled === false) {
+      const currentStatus = getCourseStatus(currentCourse);
+      if (!currentStatus.canMark) {
         setMessage('⏳ This course is no longer accepting attendance.');
         setMessageType('warning');
         setIsMarking(false);
         return;
       }
 
-      // Check if already has absent record - update to present
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const { data: existingAbsent } = await supabase
+      // Insert present record
+      const { error: insertError } = await supabase
         .from('attendance')
-        .select('id')
-        .eq('student_id', user.id)
-        .eq('course_id', selectedCourse)
-        .eq('status', 'absent')
-        .gte('date', today.toISOString());
+        .insert({
+          student_id: user.id,
+          course_id: selectedCourse,
+          status: 'present'
+        });
 
-      if (existingAbsent && existingAbsent.length > 0) {
-        // Update absent to present
-        const { error: updateError } = await supabase
-          .from('attendance')
-          .update({ status: 'present' })
-          .eq('id', existingAbsent[0].id);
-
-        if (updateError) {
-          addDebug('❌ Update error: ' + updateError.message, true);
-          throw updateError;
-        }
-        addDebug('✅ Updated absent to present');
-      } else {
-        // Insert new present record
-        const { error: insertError } = await supabase
-          .from('attendance')
-          .insert({
-            student_id: user.id,
-            course_id: selectedCourse,
-            status: 'present'
-          });
-
-        if (insertError) {
-          addDebug('❌ Insert error: ' + insertError.message, true);
-          throw insertError;
-        }
+      if (insertError) {
+        addDebug('❌ Insert error: ' + insertError.message, true);
+        throw insertError;
       }
 
       const updatedMarked = [...todayAttendance, selectedCourse];
@@ -376,18 +364,22 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
-      // Auto-select next unmarked active course
-      const nextUnmarked = activeCourses.find(c => !updatedMarked.includes(c.id));
-      if (nextUnmarked) {
+      // Auto-select next available course
+      const availableCourses = courses.filter(c => {
+        const status = getCourseStatus(c);
+        return status.canMark && !updatedMarked.includes(c.id);
+      });
+      
+      if (availableCourses.length > 0) {
         setTimeout(() => {
-          setSelectedCourse(nextUnmarked.id);
-          addDebug(`🔄 Auto-selected next: ${nextUnmarked.course_code}`);
+          setSelectedCourse(availableCourses[0].id);
+          addDebug(`🔄 Auto-selected next: ${availableCourses[0].course_code}`);
           setFaceMatched(false);
         }, 1500);
       } else {
         setTimeout(() => {
           setSelectedCourse('');
-          addDebug('✅ All active courses marked today!');
+          addDebug('✅ All available courses marked today!');
           setFaceMatched(false);
         }, 1500);
       }
@@ -405,9 +397,31 @@ const MarkAttendance = () => {
     return courses.find(c => c.id === selectedCourse);
   };
 
-  const allActiveCourses = activeCourses.length;
-  const allMarkedToday = markedActiveCourses.length;
-  const progressPercentage = allActiveCourses > 0 ? Math.round((allMarkedToday / allActiveCourses) * 100) : 0;
+  // Separate courses by status
+  const lecturingCourses = courses.filter(c => {
+    const status = getCourseStatus(c);
+    return status.canMark && !todayAttendance.includes(c.id);
+  });
+
+  const markedCourses = courses.filter(c => todayAttendance.includes(c.id));
+
+  const endedCourses = courses.filter(c => {
+    const status = getCourseStatus(c);
+    return status.status === 'ended' && !todayAttendance.includes(c.id);
+  });
+
+  const notStartedCourses = courses.filter(c => {
+    const status = getCourseStatus(c);
+    return status.status === 'not_started' && !todayAttendance.includes(c.id);
+  });
+
+  const inactiveCourses = courses.filter(c => {
+    const status = getCourseStatus(c);
+    return status.status === 'inactive' && !todayAttendance.includes(c.id);
+  });
+
+  const allAvailableCourses = lecturingCourses.length + markedCourses.length + endedCourses.length + notStartedCourses.length + inactiveCourses.length;
+  const progressPercentage = allAvailableCourses > 0 ? Math.round((markedCourses.length / allAvailableCourses) * 100) : 0;
 
   return (
     <Container className="mt-4">
@@ -485,13 +499,13 @@ const MarkAttendance = () => {
                 </div>
                 <div>
                   <span className="text-muted small">
-                    📊 {allMarkedToday} / {allActiveCourses} marked
+                    📊 {markedCourses.length} / {lecturingCourses.length + markedCourses.length} marked
                   </span>
                 </div>
               </div>
 
               {/* Mark Attendance Button */}
-              {allActiveCourses > 0 && unmarkedActiveCourses.length > 0 ? (
+              {lecturingCourses.length > 0 ? (
                 <Button
                   variant="success"
                   onClick={handleMarkAttendance}
@@ -510,7 +524,7 @@ const MarkAttendance = () => {
                   )}
                 </Button>
               ) : (
-                allActiveCourses > 0 && (
+                markedCourses.length > 0 && (
                   <Button
                     variant="success"
                     disabled={true}
@@ -531,7 +545,7 @@ const MarkAttendance = () => {
               <h5 className="mb-3">📚 Course Selection</h5>
 
               {/* Progress Bar */}
-              {allActiveCourses > 0 && (
+              {allAvailableCourses > 0 && (
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
                     <span className="small">Today's Progress</span>
@@ -557,10 +571,10 @@ const MarkAttendance = () => {
               ) : (
                 <>
                   {/* Lecturing Courses (ON) - Available to Mark */}
-                  {unmarkedActiveCourses.length > 0 ? (
+                  {lecturingCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
-                        📖 Lecture in Progress ({unmarkedActiveCourses.length})
+                        📖 Lecture in Progress ({lecturingCourses.length})
                       </Form.Label>
                       <Form.Select
                         value={selectedCourse}
@@ -569,7 +583,7 @@ const MarkAttendance = () => {
                         style={{ fontSize: '1rem', padding: '10px', borderRadius: '10px', borderColor: '#28a745' }}
                       >
                         <option value="">-- Select Course --</option>
-                        {unmarkedActiveCourses.map((course) => (
+                        {lecturingCourses.map((course) => (
                           <option key={course.id} value={course.id}>
                             {course.course_code} - {course.course_name} 📖
                           </option>
@@ -577,22 +591,16 @@ const MarkAttendance = () => {
                       </Form.Select>
                       <small className="text-muted">These courses are currently lecturing. Mark your attendance now!</small>
                     </div>
-                  ) : (
-                    allActiveCourses > 0 && (
-                      <div className="text-center py-2">
-                        <p className="text-success fw-bold">✅ All active courses marked!</p>
-                      </div>
-                    )
                   )}
 
                   {/* Already Marked Today */}
-                  {markedActiveCourses.length > 0 && (
+                  {markedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
-                        ✅ Already Marked ({markedActiveCourses.length})
+                        ✅ Already Marked ({markedCourses.length})
                       </Form.Label>
                       <div className="p-2 bg-light rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #dee2e6', borderRadius: '10px' }}>
-                        {markedActiveCourses.map((course) => (
+                        {markedCourses.map((course) => (
                           <div key={course.id} className="d-flex align-items-center gap-2 py-1">
                             <Badge bg="success" className="p-1">✅</Badge>
                             <span className="text-muted small">{course.course_code}</span>
@@ -602,36 +610,61 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* Absent / Not Started Courses (OFF) */}
-                  {absentCourses.length > 0 && (
+                  {/* Class Ended (Was ON but turned OFF) */}
+                  {endedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#dc3545' }}>
-                        ❌ Absent / Not Started ({absentCourses.length})
+                        ❌ Class Ended ({endedCourses.length})
                       </Form.Label>
-                      <div className="p-2 rounded" style={{ maxHeight: '100px', overflowY: 'auto', border: '1px solid #dc3545', borderRadius: '10px', background: '#fff5f5' }}>
-                        {absentCourses.map((course) => {
-                          const status = getCourseStatus(course);
-                          return (
-                            <div key={course.id} className="d-flex align-items-center gap-2 py-1">
-                              <Badge bg={status.color} className="p-1">
-                                {status.status === 'inactive' ? '⏳' : '❌'}
-                              </Badge>
-                              <span className="text-muted small">
-                                {course.course_code} 
-                                <span className="text-muted ms-1" style={{ fontSize: '0.7rem' }}>
-                                  ({status.label})
-                                </span>
-                              </span>
-                            </div>
-                          );
-                        })}
+                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #dc3545', borderRadius: '10px', background: '#fff5f5' }}>
+                        {endedCourses.map((course) => (
+                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
+                            <Badge bg="danger" className="p-1">❌</Badge>
+                            <span className="text-muted small">{course.course_code}</span>
+                          </div>
+                        ))}
                       </div>
-                      <small className="text-muted">You have been marked absent for these courses today.</small>
+                      <small className="text-muted">You missed these courses. Class has ended.</small>
+                    </div>
+                  )}
+
+                  {/* Not Started Yet */}
+                  {notStartedCourses.length > 0 && (
+                    <div className="mb-3">
+                      <Form.Label className="fw-bold" style={{ color: '#ffc107' }}>
+                        ⏳ Not Started Yet ({notStartedCourses.length})
+                      </Form.Label>
+                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #ffc107', borderRadius: '10px', background: '#fff8e1' }}>
+                        {notStartedCourses.map((course) => (
+                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
+                            <Badge bg="warning" className="p-1">⏳</Badge>
+                            <span className="text-muted small">{course.course_code}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <small className="text-muted">These courses haven't started yet today.</small>
+                    </div>
+                  )}
+
+                  {/* Inactive Courses */}
+                  {inactiveCourses.length > 0 && (
+                    <div className="mb-3">
+                      <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
+                        ⏳ Inactive ({inactiveCourses.length})
+                      </Form.Label>
+                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #ced4da', borderRadius: '10px', background: '#f8f9fa' }}>
+                        {inactiveCourses.map((course) => (
+                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
+                            <Badge bg="secondary" className="p-1">⏳</Badge>
+                            <span className="text-muted small">{course.course_code}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
                   {/* Selected Course Info */}
-                  {getSelectedCourseDetails() && unmarkedActiveCourses.length > 0 && selectedCourse && (
+                  {getSelectedCourseDetails() && lecturingCourses.length > 0 && selectedCourse && (
                     <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745', borderRadius: '10px' }}>
                       <div className="d-flex justify-content-between align-items-center">
                         <div>
@@ -646,12 +679,12 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* No Active Courses */}
-                  {allActiveCourses === 0 && courses.length > 0 && (
+                  {/* No Courses Available */}
+                  {lecturingCourses.length === 0 && markedCourses.length === 0 && courses.length > 0 && (
                     <div className="text-center py-3">
                       <div style={{ fontSize: '40px' }}>⏳</div>
-                      <p className="text-muted mt-2">No courses are currently lecturing.</p>
-                      <small className="text-muted">All courses are either inactive or not started yet.</small>
+                      <p className="text-muted mt-2">No courses are currently available.</p>
+                      <small className="text-muted">Check back later when a course starts.</small>
                     </div>
                   )}
                 </>
