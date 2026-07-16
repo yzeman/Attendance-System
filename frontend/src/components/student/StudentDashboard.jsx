@@ -9,6 +9,8 @@ const StudentDashboard = () => {
   const [todayAbsent, setTodayAbsent] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedCourse, setSelectedCourse] = useState('');
+  const [semesterPreference, setSemesterPreference] = useState('First');
+  const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(false);
   const [stats, setStats] = useState({
     totalPresent: 0,
     totalCourses: 0,
@@ -26,7 +28,74 @@ const StudentDashboard = () => {
     try {
       console.log('🔵 Student: Fetching data for:', user?.email);
       
-      // 1. Fetch student's attendance records
+      // 1. Get student's semester preference and enrolled courses
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('enrolled_courses, semester_preference')
+        .eq('id', user.id)
+        .single();
+
+      if (userError) {
+        console.error('❌ User fetch error:', userError);
+      } else {
+        console.log('✅ User data fetched:', userData);
+      }
+
+      // 2. Get admin's semester preference (controls if second semester is available)
+      const { data: adminData, error: adminError } = await supabase
+        .from('users')
+        .select('semester_preference')
+        .eq('role', 'admin')
+        .limit(1)
+        .single();
+
+      if (!adminError && adminData) {
+        setSecondSemesterEnabled(adminData.semester_preference === 'Second');
+      }
+
+      // 3. Get student's semester preference
+      let pref = userData?.semester_preference || 'First';
+      
+      // If second semester is OFF in admin, force student to First semester
+      if (secondSemesterEnabled === false && pref === 'Second') {
+        pref = 'First';
+        await supabase
+          .from('users')
+          .update({ semester_preference: 'First' })
+          .eq('id', user.id);
+        
+        const updatedUser = { ...user, semester_preference: 'First' };
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+      }
+      
+      setSemesterPreference(pref);
+
+      // 4. Remove duplicates from enrolled_courses
+      let enrolledIds = userData?.enrolled_courses || [];
+      enrolledIds = [...new Set(enrolledIds)];
+      console.log('🔵 Unique enrolled course IDs:', enrolledIds);
+
+      // 5. Fetch courses
+      let coursesData = [];
+      if (enrolledIds.length > 0) {
+        const { data: data, error: courseError } = await supabase
+          .from('courses')
+          .select('*')
+          .in('id', enrolledIds);
+
+        if (courseError) {
+          console.error('❌ Courses fetch error:', courseError);
+        } else {
+          console.log('✅ Courses fetched:', data?.length || 0, 'courses');
+          coursesData = data || [];
+        }
+        setCourses(coursesData);
+      } else {
+        console.log('⚠️ No enrolled courses found');
+        setCourses([]);
+      }
+
+      // 6. Fetch student's attendance records
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
         .select('*, course:course_id(course_code, course_name)')
@@ -40,54 +109,27 @@ const StudentDashboard = () => {
       }
       setAttendance(attendanceData || []);
 
-      // 2. Fetch student's enrolled courses - get DISTINCT courses
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('enrolled_courses')
-        .eq('id', user.id)
-        .single();
+      // 7. Filter attendance and courses by selected semester
+      const filteredCourseIds = coursesData
+        .filter(c => c.semester === pref)
+        .map(c => c.id);
 
-      if (userError) {
-        console.error('❌ User fetch error:', userError);
-      } else {
-        console.log('✅ User data fetched:', userData);
-      }
+      const filteredAttendance = (attendanceData || []).filter(a => 
+        filteredCourseIds.includes(a.course_id)
+      );
 
-      // Remove duplicates from enrolled_courses
-      let enrolledIds = userData?.enrolled_courses || [];
-      enrolledIds = [...new Set(enrolledIds)];
-      console.log('🔵 Unique enrolled course IDs:', enrolledIds);
-
-      if (enrolledIds.length > 0) {
-        const { data: coursesData, error: courseError } = await supabase
-          .from('courses')
-          .select('*')
-          .in('id', enrolledIds);
-
-        if (courseError) {
-          console.error('❌ Courses fetch error:', courseError);
-        } else {
-          console.log('✅ Courses fetched:', coursesData?.length || 0, 'courses');
-        }
-        setCourses(coursesData || []);
-      } else {
-        console.log('⚠️ No enrolled courses found');
-        setCourses([]);
-      }
-
-      // 3. Calculate statistics
-      const uniqueAttendance = attendanceData || [];
-      const presentCount = uniqueAttendance.filter(a => a.status === 'present').length;
-      const totalClasses = uniqueAttendance.length;
+      // 8. Calculate statistics
+      const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
+      const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
 
-      // 4. Get today's attendance
+      // 9. Get today's attendance (filtered by semester)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const todayAttendance = uniqueAttendance.filter(a => new Date(a.date) >= today);
+      const todayAttendance = filteredAttendance.filter(a => new Date(a.date) >= today);
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       
-      // 5. Get today's courses (distinct)
+      // 10. Get today's courses (distinct)
       const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
       let todayCoursesData = [];
       if (todayCourseIds.length > 0) {
@@ -99,11 +141,14 @@ const StudentDashboard = () => {
       }
       setTodayCourses(todayCoursesData);
 
-      // 6. Get today's absent courses
-      const allCourseIds = coursesData?.map(c => c.id) || [];
-      const absentCourseIds = allCourseIds.filter(id => !todayCourseIds.includes(id));
-      const absentCourses = (coursesData || []).filter(c => 
+      // 11. Get today's absent courses (only active courses)
+      const allActiveCourseIds = coursesData
+        .filter(c => c.semester === pref && c.is_active !== false && c.attendance_enabled !== false)
+        .map(c => c.id);
+      const absentCourseIds = allActiveCourseIds.filter(id => !todayCourseIds.includes(id));
+      const absentCourses = coursesData.filter(c => 
         absentCourseIds.includes(c.id) && 
+        c.semester === pref &&
         c.is_active !== false && 
         c.attendance_enabled !== false
       );
@@ -111,7 +156,7 @@ const StudentDashboard = () => {
 
       setStats({
         totalPresent: presentCount,
-        totalCourses: enrolledIds.length,
+        totalCourses: filteredCourseIds.length,
         attendancePercentage: percentage,
         todayPresent: todayPresent
       });
@@ -123,10 +168,15 @@ const StudentDashboard = () => {
     }
   };
 
-  // Group attendance by course
+  // Group attendance by course (filtered by semester)
   const getAttendanceByCourse = () => {
     const courseMap = {};
-    attendance.forEach(record => {
+    const filteredAttendance = attendance.filter(a => {
+      const course = courses.find(c => c.id === a.course_id);
+      return course && course.semester === semesterPreference;
+    });
+    
+    filteredAttendance.forEach(record => {
       const courseId = record.course_id;
       if (!courseMap[courseId]) {
         courseMap[courseId] = {
@@ -154,6 +204,9 @@ const StudentDashboard = () => {
 
   const filteredAttendance = getFilteredAttendance();
 
+  // Get courses for the current semester
+  const semesterCourses = courses.filter(c => c.semester === semesterPreference);
+
   if (loading) {
     return (
       <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
@@ -165,7 +218,12 @@ const StudentDashboard = () => {
   return (
     <Container className="mt-4">
       <div className="animate-fade-in">
-        <h2 className="mb-4">👋 Welcome, {user?.full_name}</h2>
+        <div className="d-flex justify-content-between align-items-center mb-4">
+          <h2>👋 Welcome, {user?.full_name}</h2>
+          <Badge bg="primary" className="p-2" style={{ fontSize: '1rem' }}>
+            📅 {semesterPreference} Semester
+          </Badge>
+        </div>
 
         {/* Statistics Cards */}
         <Row className="mb-4">
@@ -202,7 +260,7 @@ const StudentDashboard = () => {
               <h5 className="mb-3">✅ Today's Attended Courses</h5>
               {todayCourses.length === 0 ? (
                 <Alert variant="info">
-                  You haven't attended any courses today.
+                  You haven't attended any courses today in <strong>{semesterPreference} Semester</strong>.
                 </Alert>
               ) : (
                 <div className="d-flex flex-wrap gap-2" style={{ maxWidth: '100%' }}>
@@ -256,7 +314,7 @@ const StudentDashboard = () => {
                     ))}
                   </div>
                   <small className="text-muted mt-2">
-                    You failed to mark attendance for these courses today.
+                    You failed to mark attendance for these courses today in <strong>{semesterPreference} Semester</strong>.
                   </small>
                 </>
               )}
@@ -264,14 +322,20 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* My Courses Section - Dropdown */}
+        {/* My Courses Section - Shows current semester courses only */}
         <Row className="mb-4">
           <Col md={12}>
             <Card className="p-3">
-              <h5 className="mb-3">📚 My Enrolled Courses ({courses.length})</h5>
-              {courses.length === 0 ? (
+              <h5 className="mb-3">📚 My Enrolled Courses ({semesterCourses.length}) - {semesterPreference} Semester</h5>
+              {semesterCourses.length === 0 ? (
                 <Alert variant="info">
-                  You are not enrolled in any courses yet. Please contact your lecturer or admin.
+                  You are not enrolled in any courses for <strong>{semesterPreference} Semester</strong>.
+                  {semesterPreference === 'First' && secondSemesterEnabled && (
+                    <span> Please switch to Second Semester in the <strong>My Courses</strong> page.</span>
+                  )}
+                  {semesterPreference === 'Second' && (
+                    <span> Please switch to First Semester in the <strong>My Courses</strong> page.</span>
+                  )}
                 </Alert>
               ) : (
                 <>
@@ -282,7 +346,7 @@ const StudentDashboard = () => {
                       onChange={(e) => setSelectedCourse(e.target.value)}
                     >
                       <option value="">-- All Courses --</option>
-                      {courses.map((course) => (
+                      {semesterCourses.map((course) => (
                         <option key={course.id} value={course.id}>
                           {course.course_code} - {course.course_name}
                         </option>
@@ -305,7 +369,7 @@ const StudentDashboard = () => {
                       </thead>
                       <tbody>
                         {courseStats
-                          .filter(c => !selectedCourse || c.courseCode === courses.find(c => c.id === selectedCourse)?.course_code)
+                          .filter(c => !selectedCourse || c.courseCode === semesterCourses.find(c => c.id === selectedCourse)?.course_code)
                           .map((course, index) => {
                             const percentage = course.total > 0 
                               ? Math.round((course.present / course.total) * 100) 
@@ -314,7 +378,7 @@ const StudentDashboard = () => {
                               <tr key={index}>
                                 <td><strong>{course.courseCode}</strong></td>
                                 <td>{course.courseName}</td>
-                                <td>{courses.find(c => c.course_code === course.courseCode)?.lecturer || 'N/A'}</td>
+                                <td>{semesterCourses.find(c => c.course_code === course.courseCode)?.lecturer || 'N/A'}</td>
                                 <td>{course.present}</td>
                                 <td>{course.total}</td>
                                 <td>
@@ -328,7 +392,7 @@ const StudentDashboard = () => {
                               </tr>
                             );
                           })}
-                        {selectedCourse && courseStats.filter(c => c.courseCode === courses.find(c => c.id === selectedCourse)?.course_code).length === 0 && (
+                        {selectedCourse && courseStats.filter(c => c.courseCode === semesterCourses.find(c => c.id === selectedCourse)?.course_code).length === 0 && (
                           <tr>
                             <td colSpan="6" className="text-center text-muted">
                               No attendance records for this course yet.
@@ -344,11 +408,11 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* Recent Attendance History */}
+        {/* Recent Attendance History - Shows current semester only */}
         <Row>
           <Col md={12}>
             <Card className="p-3">
-              <h5 className="mb-3">🕐 Recent Attendance History</h5>
+              <h5 className="mb-3">🕐 Recent Attendance History - {semesterPreference} Semester</h5>
               <div className="table-container">
                 <Table striped bordered hover responsive>
                   <thead>
@@ -359,24 +423,33 @@ const StudentDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {attendance.length === 0 ? (
+                    {attendance.filter(a => {
+                      const course = courses.find(c => c.id === a.course_id);
+                      return course && course.semester === semesterPreference;
+                    }).length === 0 ? (
                       <tr>
                         <td colSpan="3" className="text-center text-muted">
-                          No attendance records yet.
+                          No attendance records for {semesterPreference} Semester yet.
                         </td>
                       </tr>
                     ) : (
-                      (selectedCourse ? filteredAttendance : attendance).slice(0, 20).map((record) => (
-                        <tr key={record.id}>
-                          <td>{new Date(record.date).toLocaleString()}</td>
-                          <td>{record.course?.course_code} - {record.course?.course_name}</td>
-                          <td>
-                            <Badge bg="success" className="px-3 py-2">
-                              ✅ Present
-                            </Badge>
-                          </td>
-                        </tr>
-                      ))
+                      attendance
+                        .filter(a => {
+                          const course = courses.find(c => c.id === a.course_id);
+                          return course && course.semester === semesterPreference;
+                        })
+                        .slice(0, 20)
+                        .map((record) => (
+                          <tr key={record.id}>
+                            <td>{new Date(record.date).toLocaleString()}</td>
+                            <td>{record.course?.course_code} - {record.course?.course_name}</td>
+                            <td>
+                              <Badge bg="success" className="px-3 py-2">
+                                ✅ Present
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))
                     )}
                   </tbody>
                 </Table>
