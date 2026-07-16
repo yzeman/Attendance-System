@@ -101,7 +101,7 @@ const StudentDashboard = () => {
         setCourses([]);
       }
 
-      // 7. Fetch student's attendance records (ALL - present and absent)
+      // 7. Fetch ALL attendance records for this student (both present and absent)
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
         .select('*, course:course_id(course_code, course_name)')
@@ -112,7 +112,10 @@ const StudentDashboard = () => {
         console.error('❌ Attendance fetch error:', attError);
       } else {
         console.log('✅ Attendance fetched:', attendanceData?.length || 0, 'records');
-        console.log('📊 Attendance statuses:', attendanceData?.map(a => a.status));
+        // Log status breakdown
+        const presentCount = attendanceData?.filter(a => a.status === 'present').length || 0;
+        const absentCount = attendanceData?.filter(a => a.status === 'absent').length || 0;
+        console.log(`📊 Status breakdown: Present: ${presentCount}, Absent: ${absentCount}`);
       }
       setAttendance(attendanceData || []);
 
@@ -126,11 +129,15 @@ const StudentDashboard = () => {
         filteredCourseIds.includes(a.course_id)
       );
 
-      // 10. Calculate statistics (TOTAL)
+      console.log('📊 Filtered attendance for semester:', filteredAttendance.length);
+
+      // 10. Calculate TOTAL statistics for the semester
       const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
       const absentCount = filteredAttendance.filter(a => a.status === 'absent').length;
       const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
+
+      console.log(`📊 Semester stats: Present: ${presentCount}, Absent: ${absentCount}, Total: ${totalClasses}`);
 
       // 11. Get TODAY's attendance (filtered by semester)
       const today = new Date();
@@ -141,8 +148,8 @@ const StudentDashboard = () => {
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       const todayAbsent = todayAttendance.filter(a => a.status === 'absent').length;
       
-      console.log('📊 Today attendance:', { todayPresent, todayAbsent, total: todayAttendance.length });
-      
+      console.log(`📊 Today: Present: ${todayPresent}, Absent: ${todayAbsent}`);
+
       // 12. Get today's attended courses (present)
       const todayCourseIds = [...new Set(todayAttendance.filter(a => a.status === 'present').map(a => a.course_id))];
       let todayCoursesData = [];
@@ -165,8 +172,10 @@ const StudentDashboard = () => {
         c.semester === studentPref
       );
       setTodayAbsent(absentCourses);
-      console.log('📊 Today absent courses:', absentCourses.map(c => c.course_code));
+      
+      console.log('📊 Today absent courses:', absentCourses.map(c => c.course_code).join(', ') || 'None');
 
+      // 14. Update stats
       setStats({
         totalPresent: presentCount,
         totalAbsent: absentCount,
@@ -183,7 +192,7 @@ const StudentDashboard = () => {
     }
   };
 
-  // Group attendance by course (filtered by semester)
+  // Group attendance by course (filtered by semester) - includes both present and absent
   const getAttendanceByCourse = () => {
     const courseMap = {};
     const filteredAttendance = attendance.filter(a => {
@@ -246,39 +255,39 @@ const StudentDashboard = () => {
           </Badge>
         </div>
 
-        {/* Statistics Cards */}
+        {/* Statistics Cards - 6 cards in 2 rows */}
         <Row className="mb-4">
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card">
               <h2>{stats.totalPresent}</h2>
               <p>✅ Total Present</p>
             </Card>
           </Col>
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' }}>
               <h2>{stats.totalAbsent}</h2>
               <p>❌ Total Absent</p>
             </Card>
           </Col>
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
               <h2>{stats.totalCourses}</h2>
-              <p>📚 Enrolled Courses</p>
+              <p>📚 Enrolled</p>
             </Card>
           </Col>
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
               <h2>{stats.attendancePercentage}%</h2>
               <p>📈 Attendance Rate</p>
             </Card>
           </Col>
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
               <h2>{stats.todayPresent}</h2>
               <p>✅ Today Present</p>
             </Card>
           </Col>
-          <Col md={2}>
+          <Col md={2} xs={4}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
               <h2>{stats.todayAbsent}</h2>
               <p>❌ Today Absent</p>
@@ -363,12 +372,6 @@ const StudentDashboard = () => {
               {semesterCourses.length === 0 ? (
                 <Alert variant="info">
                   You are not enrolled in any courses for <strong>{semesterPreference} Semester</strong>.
-                  {semesterPreference === 'First' && secondSemesterEnabled && hasSecondSemesterCourses && (
-                    <span> Please switch to Second Semester in the <strong>My Courses</strong> page.</span>
-                  )}
-                  {semesterPreference === 'Second' && (
-                    <span> Please switch to First Semester in the <strong>My Courses</strong> page.</span>
-                  )}
                 </Alert>
               ) : (
                 <>
@@ -442,7 +445,7 @@ const StudentDashboard = () => {
           </Col>
         </Row>
 
-        {/* Recent Attendance History */}
+        {/* Recent Attendance History - Shows both Present and Absent */}
         <Row>
           <Col md={12}>
             <Card className="p-3">
@@ -457,40 +460,40 @@ const StudentDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {attendance.filter(a => {
-                      const course = courses.find(c => c.id === a.course_id);
-                      return course && course.semester === semesterPreference;
-                    }).length === 0 ? (
-                      <tr>
-                        <td colSpan="3" className="text-center text-muted">
-                          No attendance records for {semesterPreference} Semester yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      attendance
-                        .filter(a => {
-                          const course = courses.find(c => c.id === a.course_id);
-                          return course && course.semester === semesterPreference;
-                        })
-                        .slice(0, 20)
-                        .map((record) => (
-                          <tr key={record.id}>
-                            <td>{new Date(record.date).toLocaleString()}</td>
-                            <td>{record.course?.course_code} - {record.course?.course_name}</td>
-                            <td>
-                              {record.status === 'present' ? (
-                                <Badge bg="success" className="px-3 py-2">
-                                  ✅ Present
-                                </Badge>
-                              ) : (
-                                <Badge bg="danger" className="px-3 py-2">
-                                  ❌ Absent
-                                </Badge>
-                              )}
+                    {(() => {
+                      const filteredHistory = attendance.filter(a => {
+                        const course = courses.find(c => c.id === a.course_id);
+                        return course && course.semester === semesterPreference;
+                      });
+                      
+                      if (filteredHistory.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan="3" className="text-center text-muted">
+                              No attendance records for {semesterPreference} Semester yet.
                             </td>
                           </tr>
-                        ))
-                    )}
+                        );
+                      }
+                      
+                      return filteredHistory.slice(0, 20).map((record) => (
+                        <tr key={record.id}>
+                          <td>{new Date(record.date).toLocaleString()}</td>
+                          <td>{record.course?.course_code} - {record.course?.course_name}</td>
+                          <td>
+                            {record.status === 'present' ? (
+                              <Badge bg="success" className="px-3 py-2">
+                                ✅ Present
+                              </Badge>
+                            ) : (
+                              <Badge bg="danger" className="px-3 py-2">
+                                ❌ Absent
+                              </Badge>
+                            )}
+                          </td>
+                        </tr>
+                      ));
+                    })()}
                   </tbody>
                 </Table>
               </div>
