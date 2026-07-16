@@ -138,6 +138,12 @@ const MarkAttendance = () => {
       setTodayAttendance(presentCourses);
       addDebug(`✅ Today's present: ${presentCourses.length} course(s)`);
       
+      // Also log any absent records found
+      const absentCourses = (data || []).filter(a => a.status === 'absent').map(a => a.course_id);
+      if (absentCourses.length > 0) {
+        addDebug(`⚠️ Found ${absentCourses.length} existing absent records`);
+      }
+      
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
     }
@@ -171,6 +177,99 @@ const MarkAttendance = () => {
       
     } catch (error) {
       addDebug('❌ Error fetching course statuses: ' + error.message, true);
+    }
+  };
+
+  // ✅ FIXED: Mark absent for OFF, Inactive, and Class Ended courses
+  const markAbsentForOffCourses = async () => {
+    try {
+      addDebug('🔵 Checking for absent courses...');
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = today.toISOString();
+      
+      let absentCount = 0;
+      let skippedCount = 0;
+      
+      for (let course of courses) {
+        // Skip if already marked present (from todayAttendance)
+        if (todayAttendance.includes(course.id)) {
+          skippedCount++;
+          continue;
+        }
+        
+        // Check if already has attendance record today (present OR absent)
+        const { data: existing, error: checkError } = await supabase
+          .from('attendance')
+          .select('id, status')
+          .eq('student_id', user.id)
+          .eq('course_id', course.id)
+          .gte('date', todayStr);
+
+        if (checkError) {
+          console.error('Error checking attendance:', checkError);
+          continue;
+        }
+
+        // If already has a record, skip (don't duplicate)
+        if (existing && existing.length > 0) {
+          skippedCount++;
+          continue;
+        }
+
+        // ✅ DETERMINE IF STUDENT SHOULD BE MARKED ABSENT
+        let shouldMarkAbsent = false;
+        let reason = '';
+        
+        if (course.is_active === false) {
+          shouldMarkAbsent = true;
+          reason = 'Course Inactive';
+        } else if (course.attendance_enabled === false) {
+          // Check if it was ever turned ON today (using course_schedule)
+          const status = courseStatuses[course.id];
+          if (status && status.turned_on_at) {
+            // Was ON at some point, now OFF → Class Ended
+            shouldMarkAbsent = true;
+            reason = 'Class Ended';
+          } else {
+            // Never turned ON today → Not Started (don't mark absent)
+            shouldMarkAbsent = false;
+            reason = 'Not Started Yet';
+          }
+        }
+        
+        if (shouldMarkAbsent) {
+          const { error: insertError } = await supabase
+            .from('attendance')
+            .insert({
+              student_id: user.id,
+              course_id: course.id,
+              status: 'absent',
+              date: today
+            });
+
+          if (insertError) {
+            console.error('Error marking absent:', insertError);
+          } else {
+            absentCount++;
+            addDebug(`✅ Marked ABSENT for: ${course.course_code} (${reason})`);
+          }
+        } else {
+          addDebug(`⏳ Skipped: ${course.course_code} (${reason})`);
+        }
+      }
+      
+      if (absentCount > 0) {
+        addDebug(`✅ Marked ${absentCount} course(s) as ABSENT`);
+      } else {
+        addDebug(`✅ No courses to mark absent (${skippedCount} already have records)`);
+      }
+      
+      // Refresh today's attendance
+      await fetchTodayAttendance();
+      
+    } catch (error) {
+      addDebug('❌ Error marking absent: ' + error.message, true);
     }
   };
 
@@ -229,81 +328,6 @@ const MarkAttendance = () => {
       color: 'warning',
       canMark: false 
     };
-  };
-
-  // ✅ FIXED: Mark absent for OFF and Class Ended courses
-  const markAbsentForOffCourses = async () => {
-    try {
-      addDebug('🔵 Checking for absent courses...');
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = today.toISOString();
-      
-      let absentCount = 0;
-      
-      for (let course of courses) {
-        const status = getCourseStatus(course);
-        
-        // Skip if already marked present
-        if (todayAttendance.includes(course.id)) {
-          continue;
-        }
-        
-        // Check if already has attendance record today
-        const { data: existing, error: checkError } = await supabase
-          .from('attendance')
-          .select('id, status')
-          .eq('student_id', user.id)
-          .eq('course_id', course.id)
-          .gte('date', todayStr);
-
-        if (checkError) {
-          console.error('Error checking attendance:', checkError);
-          continue;
-        }
-
-        // If already has a record, skip
-        if (existing && existing.length > 0) {
-          continue;
-        }
-
-        // Mark absent if:
-        // 1. Course is inactive
-        // 2. Course attendance is OFF and it was turned ON before (Class Ended)
-        // 3. Course attendance is OFF and is NOT active (Not Started - don't mark absent)
-        const shouldMarkAbsent = 
-          course.is_active === false || 
-          (course.attendance_enabled === false && status.status === 'ended');
-        
-        if (shouldMarkAbsent) {
-          const { error: insertError } = await supabase
-            .from('attendance')
-            .insert({
-              student_id: user.id,
-              course_id: course.id,
-              status: 'absent',
-              date: today
-            });
-
-          if (insertError) {
-            console.error('Error marking absent:', insertError);
-          } else {
-            absentCount++;
-            addDebug(`✅ Marked absent for: ${course.course_code} (${status.label})`);
-          }
-        }
-      }
-      
-      if (absentCount > 0) {
-        addDebug(`✅ Marked ${absentCount} course(s) as absent`);
-      }
-      
-      // Refresh today's attendance
-      await fetchTodayAttendance();
-      
-    } catch (error) {
-      addDebug('❌ Error marking absent: ' + error.message, true);
-    }
   };
 
   const handleMarkAttendance = async () => {
