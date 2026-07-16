@@ -28,7 +28,7 @@ const StudentDashboard = () => {
     try {
       console.log('🔵 Student: Fetching data for:', user?.email);
       
-      // 1. Get student's semester preference and enrolled courses
+      // 1. Get student's enrolled courses and semester preference
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses, semester_preference')
@@ -41,7 +41,7 @@ const StudentDashboard = () => {
         console.log('✅ User data fetched:', userData);
       }
 
-      // 2. Get admin's semester preference (controls if second semester is available)
+      // 2. Get admin's semester preference (only to check if second semester is available)
       const { data: adminData, error: adminError } = await supabase
         .from('users')
         .select('semester_preference')
@@ -49,16 +49,19 @@ const StudentDashboard = () => {
         .limit(1)
         .single();
 
+      let adminSecondSemesterEnabled = false;
       if (!adminError && adminData) {
-        setSecondSemesterEnabled(adminData.semester_preference === 'Second');
+        adminSecondSemesterEnabled = adminData.semester_preference === 'Second';
       }
+      setSecondSemesterEnabled(adminSecondSemesterEnabled);
 
-      // 3. Get student's semester preference
-      let pref = userData?.semester_preference || 'First';
+      // 3. Get student's semester preference - THIS IS THE SOURCE OF TRUTH
+      let studentPref = userData?.semester_preference || 'First';
       
-      // If second semester is OFF in admin, force student to First semester
-      if (secondSemesterEnabled === false && pref === 'Second') {
-        pref = 'First';
+      // ✅ FIX: If student prefers Second but admin has it OFF, force to First
+      if (studentPref === 'Second' && !adminSecondSemesterEnabled) {
+        studentPref = 'First';
+        // Update student's preference to match
         await supabase
           .from('users')
           .update({ semester_preference: 'First' })
@@ -68,7 +71,7 @@ const StudentDashboard = () => {
         localStorage.setItem('user', JSON.stringify(updatedUser));
       }
       
-      setSemesterPreference(pref);
+      setSemesterPreference(studentPref);
 
       // 4. Remove duplicates from enrolled_courses
       let enrolledIds = userData?.enrolled_courses || [];
@@ -109,27 +112,28 @@ const StudentDashboard = () => {
       }
       setAttendance(attendanceData || []);
 
-      // 7. Filter attendance and courses by selected semester
+      // 7. Filter courses by student's selected semester
       const filteredCourseIds = coursesData
-        .filter(c => c.semester === pref)
+        .filter(c => c.semester === studentPref)
         .map(c => c.id);
 
+      // 8. Filter attendance by student's selected semester
       const filteredAttendance = (attendanceData || []).filter(a => 
         filteredCourseIds.includes(a.course_id)
       );
 
-      // 8. Calculate statistics
+      // 9. Calculate statistics
       const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
       const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
 
-      // 9. Get today's attendance (filtered by semester)
+      // 10. Get today's attendance (filtered by semester)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayAttendance = filteredAttendance.filter(a => new Date(a.date) >= today);
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       
-      // 10. Get today's courses (distinct)
+      // 11. Get today's courses (distinct)
       const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
       let todayCoursesData = [];
       if (todayCourseIds.length > 0) {
@@ -141,14 +145,14 @@ const StudentDashboard = () => {
       }
       setTodayCourses(todayCoursesData);
 
-      // 11. Get today's absent courses (only active courses)
+      // 12. Get today's absent courses (only active courses in current semester)
       const allActiveCourseIds = coursesData
-        .filter(c => c.semester === pref && c.is_active !== false && c.attendance_enabled !== false)
+        .filter(c => c.semester === studentPref && c.is_active !== false && c.attendance_enabled !== false)
         .map(c => c.id);
       const absentCourseIds = allActiveCourseIds.filter(id => !todayCourseIds.includes(id));
       const absentCourses = coursesData.filter(c => 
         absentCourseIds.includes(c.id) && 
-        c.semester === pref &&
+        c.semester === studentPref &&
         c.is_active !== false && 
         c.attendance_enabled !== false
       );
@@ -207,6 +211,9 @@ const StudentDashboard = () => {
   // Get courses for the current semester
   const semesterCourses = courses.filter(c => c.semester === semesterPreference);
 
+  // Check if student has any second semester courses
+  const hasSecondSemesterCourses = courses.some(c => c.semester === 'Second');
+
   if (loading) {
     return (
       <Container className="d-flex justify-content-center align-items-center" style={{ minHeight: '60vh' }}>
@@ -222,6 +229,9 @@ const StudentDashboard = () => {
           <h2>👋 Welcome, {user?.full_name}</h2>
           <Badge bg="primary" className="p-2" style={{ fontSize: '1rem' }}>
             📅 {semesterPreference} Semester
+            {semesterPreference === 'Second' && !secondSemesterEnabled && (
+              <span style={{ color: '#ffc107', marginLeft: '5px' }}>⚠️</span>
+            )}
           </Badge>
         </div>
 
@@ -330,7 +340,7 @@ const StudentDashboard = () => {
               {semesterCourses.length === 0 ? (
                 <Alert variant="info">
                   You are not enrolled in any courses for <strong>{semesterPreference} Semester</strong>.
-                  {semesterPreference === 'First' && secondSemesterEnabled && (
+                  {semesterPreference === 'First' && secondSemesterEnabled && hasSecondSemesterCourses && (
                     <span> Please switch to Second Semester in the <strong>My Courses</strong> page.</span>
                   )}
                   {semesterPreference === 'Second' && (
