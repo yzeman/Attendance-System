@@ -17,13 +17,26 @@ const MarkAttendance = () => {
   const [courseStatuses, setCourseStatuses] = useState({});
   const [debugMessages, setDebugMessages] = useState([]);
   const [faceMatched, setFaceMatched] = useState(false);
+  const [absentDebug, setAbsentDebug] = useState([]);
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
   const addDebug = (message, isError = false) => {
     const timestamp = new Date().toLocaleTimeString();
-    setDebugMessages(prev => [...prev, { timestamp, message, isError }]);
-    console.log(`[${timestamp}] ${message}`);
+    const entry = { timestamp, message, isError };
+    setDebugMessages(prev => [...prev, entry]);
+    if (isError) {
+      console.error(`[${timestamp}] ❌ ${message}`);
+    } else {
+      console.log(`[${timestamp}] ${message}`);
+    }
+  };
+
+  const addAbsentDebug = (message, data = null) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const entry = { timestamp, message, data: data ? JSON.stringify(data, null, 2) : null };
+    setAbsentDebug(prev => [...prev, entry]);
+    console.log(`[${timestamp}] 📊 ABSENT DEBUG: ${message}`, data || '');
   };
 
   useEffect(() => {
@@ -38,7 +51,11 @@ const MarkAttendance = () => {
       await fetchCourses();
       await fetchTodayAttendance();
       await fetchCourseStatuses();
-      await markAbsentForOffCourses();
+      
+      // Run absent check after everything is loaded
+      setTimeout(async () => {
+        await markAbsentForOffCourses();
+      }, 1000);
       
       addDebug('✅ Initialization complete');
     };
@@ -138,14 +155,19 @@ const MarkAttendance = () => {
       setTodayAttendance(presentCourses);
       addDebug(`✅ Today's present: ${presentCourses.length} course(s)`);
       
-      // Also log any absent records found
-      const absentCourses = (data || []).filter(a => a.status === 'absent').map(a => a.course_id);
-      if (absentCourses.length > 0) {
-        addDebug(`⚠️ Found ${absentCourses.length} existing absent records`);
+      const absentRecords = (data || []).filter(a => a.status === 'absent');
+      if (absentRecords.length > 0) {
+        addDebug(`⚠️ Found ${absentRecords.length} existing absent records`);
+        absentRecords.forEach(r => {
+          addDebug(`   ❌ ${r.course_id}`);
+        });
       }
+      
+      return data || [];
       
     } catch (error) {
       addDebug('❌ Error fetching today\'s attendance: ' + error.message, true);
+      return [];
     }
   };
 
@@ -180,89 +202,136 @@ const MarkAttendance = () => {
     }
   };
 
-  // ✅ FIXED: Mark absent for OFF, Inactive, and Class Ended courses
+  // ✅ DEBUGGING VERSION: Mark absent with full logging
   const markAbsentForOffCourses = async () => {
     try {
-      addDebug('🔵 Checking for absent courses...');
+      addDebug('🔵 ===== STARTING ABSENT CHECK =====');
+      addAbsentDebug('🚀 Starting absent check...');
+      
+      if (courses.length === 0) {
+        addDebug('⚠️ No courses loaded yet, skipping absent check');
+        addAbsentDebug('⚠️ No courses loaded yet');
+        return;
+      }
+      
+      addAbsentDebug(`📋 Total courses: ${courses.length}`);
+      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayStr = today.toISOString();
       
+      addAbsentDebug(`📅 Today: ${todayStr}`);
+      
       let absentCount = 0;
-      let skippedCount = 0;
+      let alreadyMarkedCount = 0;
+      let notApplicableCount = 0;
+      let errorCount = 0;
+      
+      // Log all courses and their status
+      addAbsentDebug('📋 Course Status Summary:');
       
       for (let course of courses) {
-        // Skip if already marked present (from todayAttendance)
-        if (todayAttendance.includes(course.id)) {
-          skippedCount++;
-          continue;
-        }
+        const isPresent = todayAttendance.includes(course.id);
+        const status = courseStatuses[course.id];
+        const isActive = course.is_active;
+        const attEnabled = course.attendance_enabled;
+        const wasOn = status && status.turned_on_at;
         
-        // Check if already has attendance record today (present OR absent)
-        const { data: existing, error: checkError } = await supabase
-          .from('attendance')
-          .select('id, status')
-          .eq('student_id', user.id)
-          .eq('course_id', course.id)
-          .gte('date', todayStr);
-
-        if (checkError) {
-          console.error('Error checking attendance:', checkError);
-          continue;
-        }
-
-        // If already has a record, skip (don't duplicate)
-        if (existing && existing.length > 0) {
-          skippedCount++;
-          continue;
-        }
-
-        // ✅ DETERMINE IF STUDENT SHOULD BE MARKED ABSENT
-        let shouldMarkAbsent = false;
+        let statusLabel = '';
+        let shouldMark = false;
         let reason = '';
         
-        if (course.is_active === false) {
-          shouldMarkAbsent = true;
+        // Determine status
+        if (isPresent) {
+          statusLabel = '✅ ALREADY PRESENT';
+          alreadyMarkedCount++;
+        } else if (isActive === false) {
+          statusLabel = '⏳ INACTIVE';
+          shouldMark = true;
           reason = 'Course Inactive';
-        } else if (course.attendance_enabled === false) {
-          // Check if it was ever turned ON today (using course_schedule)
-          const status = courseStatuses[course.id];
-          if (status && status.turned_on_at) {
-            // Was ON at some point, now OFF → Class Ended
-            shouldMarkAbsent = true;
-            reason = 'Class Ended';
-          } else {
-            // Never turned ON today → Not Started (don't mark absent)
-            shouldMarkAbsent = false;
-            reason = 'Not Started Yet';
-          }
+        } else if (attEnabled === false && wasOn) {
+          statusLabel = '❌ CLASS ENDED';
+          shouldMark = true;
+          reason = 'Class Ended (was ON, now OFF)';
+        } else if (attEnabled === false && !wasOn) {
+          statusLabel = '⏳ NOT STARTED';
+          shouldMark = false;
+          reason = 'Not Started Yet';
+        } else if (attEnabled === true) {
+          statusLabel = '📖 ACTIVE (LECTURING)';
+          shouldMark = false;
+          reason = 'Currently ON';
+        } else {
+          statusLabel = '❓ UNKNOWN';
+          shouldMark = false;
+          reason = 'Unknown status';
         }
         
-        if (shouldMarkAbsent) {
-          const { error: insertError } = await supabase
+        addAbsentDebug(`   ${course.course_code}: ${statusLabel} (isActive: ${isActive}, attEnabled: ${attEnabled}, wasOn: ${!!wasOn})`);
+        
+        // Check if already has attendance record
+        if (!isPresent && shouldMark) {
+          const { data: existing, error: checkError } = await supabase
             .from('attendance')
-            .insert({
-              student_id: user.id,
-              course_id: course.id,
-              status: 'absent',
-              date: today
-            });
+            .select('id, status')
+            .eq('student_id', user.id)
+            .eq('course_id', course.id)
+            .gte('date', todayStr);
 
-          if (insertError) {
-            console.error('Error marking absent:', insertError);
-          } else {
-            absentCount++;
-            addDebug(`✅ Marked ABSENT for: ${course.course_code} (${reason})`);
+          if (checkError) {
+            addAbsentDebug(`   ❌ Check error for ${course.course_code}: ${checkError.message}`);
+            errorCount++;
+            continue;
           }
-        } else {
-          addDebug(`⏳ Skipped: ${course.course_code} (${reason})`);
+
+          if (existing && existing.length > 0) {
+            addAbsentDebug(`   ⏳ ${course.course_code} already has record (${existing[0].status})`);
+            alreadyMarkedCount++;
+            continue;
+          }
+
+          // ✅ MARK AS ABSENT
+          addAbsentDebug(`   📝 INSERTING ABSENT for ${course.course_code} (${reason})`);
+          
+          try {
+            const { error: insertError } = await supabase
+              .from('attendance')
+              .insert({
+                student_id: user.id,
+                course_id: course.id,
+                status: 'absent',
+                date: today
+              });
+
+            if (insertError) {
+              addAbsentDebug(`   ❌ INSERT ERROR for ${course.course_code}: ${insertError.message}`, true);
+              addDebug(`❌ Insert error for ${course.course_code}: ${insertError.message}`, true);
+              errorCount++;
+            } else {
+              addAbsentDebug(`   ✅ SUCCESS: Marked ABSENT for ${course.course_code}`);
+              addDebug(`✅ Marked ABSENT for: ${course.course_code} (${reason})`);
+              absentCount++;
+            }
+          } catch (err) {
+            addAbsentDebug(`   ❌ EXCEPTION for ${course.course_code}: ${err.message}`, true);
+            errorCount++;
+          }
         }
       }
+      
+      // Summary
+      addAbsentDebug('📊 ==== ABSENT CHECK SUMMARY ====');
+      addAbsentDebug(`✅ New Absents: ${absentCount}`);
+      addAbsentDebug(`⏳ Already Marked: ${alreadyMarkedCount}`);
+      addAbsentDebug(`⏳ Not Applicable: ${notApplicableCount}`);
+      addAbsentDebug(`❌ Errors: ${errorCount}`);
+      
+      addDebug(`📊 Absent Summary: ${absentCount} new, ${alreadyMarkedCount} already, ${errorCount} errors`);
       
       if (absentCount > 0) {
         addDebug(`✅ Marked ${absentCount} course(s) as ABSENT`);
       } else {
-        addDebug(`✅ No courses to mark absent (${skippedCount} already have records)`);
+        addDebug(`ℹ️ No new absent courses to mark`);
       }
       
       // Refresh today's attendance
@@ -270,6 +339,7 @@ const MarkAttendance = () => {
       
     } catch (error) {
       addDebug('❌ Error marking absent: ' + error.message, true);
+      addAbsentDebug(`❌ FATAL ERROR: ${error.message}`, true);
     }
   };
 
@@ -489,6 +559,7 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
+      // Auto-select next available course
       const availableCourses = courses.filter(c => {
         const status = getCourseStatus(c);
         return status.canMark && !updatedMarked.includes(c.id);
@@ -551,6 +622,54 @@ const MarkAttendance = () => {
     <Container className="mt-4">
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
+
+        {/* 🔍 ABSENT DEBUG PANEL */}
+        <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
+          <div className="d-flex justify-content-between align-items-center">
+            <h6 className="mb-0">📊 Absent Debug Log ({absentDebug.length} messages)</h6>
+            <div>
+              <Button 
+                variant="outline-primary" 
+                size="sm" 
+                className="me-1"
+                onClick={() => {
+                  setAbsentDebug([]);
+                  markAbsentForOffCourses();
+                }}
+              >
+                🔄 Re-run Absent Check
+              </Button>
+              <Button 
+                variant="outline-danger" 
+                size="sm"
+                onClick={() => setAbsentDebug([])}
+              >
+                🗑️ Clear
+              </Button>
+            </div>
+          </div>
+          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
+            {absentDebug.length === 0 ? (
+              <div className="text-muted">Waiting for absent check...</div>
+            ) : (
+              absentDebug.map((msg, idx) => (
+                <div key={idx} style={{ 
+                  color: msg.isError ? '#dc3545' : '#28a745',
+                  borderBottom: '1px solid #e9ecef',
+                  padding: '2px 0'
+                }}>
+                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
+                  {msg.data && (
+                    <details>
+                      <summary style={{ cursor: 'pointer', color: '#007bff' }}>📄 Show data</summary>
+                      <pre style={{ fontSize: '10px', margin: '5px 0', padding: '5px', background: '#fff', borderRadius: '3px', overflow: 'auto', maxHeight: '100px' }}>{msg.data}</pre>
+                    </details>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
 
         {message && (
           <Alert 
