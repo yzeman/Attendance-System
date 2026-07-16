@@ -13,9 +13,11 @@ const StudentDashboard = () => {
   const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(false);
   const [stats, setStats] = useState({
     totalPresent: 0,
+    totalAbsent: 0,
     totalCourses: 0,
     attendancePercentage: 0,
-    todayPresent: 0
+    todayPresent: 0,
+    todayAbsent: 0
   });
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -55,10 +57,9 @@ const StudentDashboard = () => {
       }
       setSecondSemesterEnabled(adminPref === 'Second');
 
-      // 3. Get student's semester preference from database - THIS IS THE SOURCE OF TRUTH
+      // 3. Get student's semester preference from database
       let studentPref = userData?.semester_preference || 'First';
       
-      // If student prefers Second but admin has it OFF, force to First
       if (studentPref === 'Second' && adminPref !== 'Second') {
         studentPref = 'First';
         await supabase
@@ -69,7 +70,7 @@ const StudentDashboard = () => {
       
       setSemesterPreference(studentPref);
 
-      // 4. Update localStorage to match database
+      // 4. Update localStorage
       const storedUser = JSON.parse(localStorage.getItem('user'));
       if (storedUser && storedUser.semester_preference !== studentPref) {
         const updatedUser = { ...storedUser, semester_preference: studentPref };
@@ -126,6 +127,7 @@ const StudentDashboard = () => {
 
       // 10. Calculate statistics
       const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
+      const absentCount = filteredAttendance.filter(a => a.status === 'absent').length;
       const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
 
@@ -134,6 +136,7 @@ const StudentDashboard = () => {
       today.setHours(0, 0, 0, 0);
       const todayAttendance = filteredAttendance.filter(a => new Date(a.date) >= today);
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
+      const todayAbsent = todayAttendance.filter(a => a.status === 'absent').length;
       
       // 12. Get today's courses (distinct)
       const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
@@ -151,20 +154,25 @@ const StudentDashboard = () => {
       const allActiveCourseIds = coursesData
         .filter(c => c.semester === studentPref && c.is_active !== false && c.attendance_enabled !== false)
         .map(c => c.id);
-      const absentCourseIds = allActiveCourseIds.filter(id => !todayCourseIds.includes(id));
+      
+      // Get courses that are absent today (status = 'absent')
+      const absentCourseIds = todayAttendance
+        .filter(a => a.status === 'absent')
+        .map(a => a.course_id);
+      
       const absentCourses = coursesData.filter(c => 
         absentCourseIds.includes(c.id) && 
-        c.semester === studentPref &&
-        c.is_active !== false && 
-        c.attendance_enabled !== false
+        c.semester === studentPref
       );
       setTodayAbsent(absentCourses);
 
       setStats({
         totalPresent: presentCount,
+        totalAbsent: absentCount,
         totalCourses: filteredCourseIds.length,
         attendancePercentage: percentage,
-        todayPresent: todayPresent
+        todayPresent: todayPresent,
+        todayAbsent: todayAbsent
       });
 
     } catch (error) {
@@ -189,12 +197,15 @@ const StudentDashboard = () => {
           courseCode: record.course?.course_code || 'Unknown',
           courseName: record.course?.course_name || 'Unknown',
           present: 0,
+          absent: 0,
           total: 0
         };
       }
       courseMap[courseId].total++;
       if (record.status === 'present') {
         courseMap[courseId].present++;
+      } else if (record.status === 'absent') {
+        courseMap[courseId].absent++;
       }
     });
     return Object.values(courseMap);
@@ -236,28 +247,40 @@ const StudentDashboard = () => {
 
         {/* Statistics Cards */}
         <Row className="mb-4">
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card">
               <h2>{stats.totalPresent}</h2>
-              <p>📋 Total Present</p>
+              <p>✅ Total Present</p>
             </Card>
           </Col>
-          <Col md={3}>
+          <Col md={2}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #dc3545 0%, #c82333 100%)' }}>
+              <h2>{stats.totalAbsent}</h2>
+              <p>❌ Total Absent</p>
+            </Card>
+          </Col>
+          <Col md={2}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' }}>
               <h2>{stats.totalCourses}</h2>
               <p>📚 Enrolled Courses</p>
             </Card>
           </Col>
-          <Col md={3}>
+          <Col md={2}>
             <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
               <h2>{stats.attendancePercentage}%</h2>
               <p>📈 Attendance Rate</p>
             </Card>
           </Col>
-          <Col md={3}>
-            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
+          <Col md={2}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
               <h2>{stats.todayPresent}</h2>
               <p>✅ Today Present</p>
+            </Card>
+          </Col>
+          <Col md={2}>
+            <Card className="stat-card" style={{ background: 'linear-gradient(135deg, #f7971e 0%, #ffd200 100%)' }}>
+              <h2>{stats.todayAbsent}</h2>
+              <p>❌ Today Absent</p>
             </Card>
           </Col>
         </Row>
@@ -301,7 +324,7 @@ const StudentDashboard = () => {
               <h5 className="mb-3" style={{ color: '#dc3545' }}>❌ Today's Absent Courses</h5>
               {todayAbsent.length === 0 ? (
                 <Alert variant="success" style={{ background: '#d4edda', borderColor: '#28a745' }}>
-                  🎉 You have marked all your active courses today! Great job!
+                  🎉 You have no absents today! Great job!
                 </Alert>
               ) : (
                 <>
@@ -323,7 +346,7 @@ const StudentDashboard = () => {
                     ))}
                   </div>
                   <small className="text-muted mt-2">
-                    You failed to mark attendance for these courses today in <strong>{semesterPreference} Semester</strong>.
+                    You were absent for these courses today in <strong>{semesterPreference} Semester</strong>.
                   </small>
                 </>
               )}
@@ -370,9 +393,10 @@ const StudentDashboard = () => {
                           <th>Course Code</th>
                           <th>Course Name</th>
                           <th>Lecturer</th>
-                          <th>Present</th>
-                          <th>Total Classes</th>
-                          <th>Percentage</th>
+                          <th>✅ Present</th>
+                          <th>❌ Absent</th>
+                          <th>📊 Total</th>
+                          <th>📈 Percentage</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -388,6 +412,7 @@ const StudentDashboard = () => {
                                 <td>{course.courseName}</td>
                                 <td>{semesterCourses.find(c => c.course_code === course.courseCode)?.lecturer || 'N/A'}</td>
                                 <td>{course.present}</td>
+                                <td>{course.absent}</td>
                                 <td>{course.total}</td>
                                 <td>
                                   <Badge 
@@ -402,7 +427,7 @@ const StudentDashboard = () => {
                           })}
                         {selectedCourse && courseStats.filter(c => c.courseCode === semesterCourses.find(c => c.id === selectedCourse)?.course_code).length === 0 && (
                           <tr>
-                            <td colSpan="6" className="text-center text-muted">
+                            <td colSpan="7" className="text-center text-muted">
                               No attendance records for this course yet.
                             </td>
                           </tr>
@@ -452,9 +477,15 @@ const StudentDashboard = () => {
                             <td>{new Date(record.date).toLocaleString()}</td>
                             <td>{record.course?.course_code} - {record.course?.course_name}</td>
                             <td>
-                              <Badge bg="success" className="px-3 py-2">
-                                ✅ Present
-                              </Badge>
+                              {record.status === 'present' ? (
+                                <Badge bg="success" className="px-3 py-2">
+                                  ✅ Present
+                                </Badge>
+                              ) : (
+                                <Badge bg="danger" className="px-3 py-2">
+                                  ❌ Absent
+                                </Badge>
+                              )}
                             </td>
                           </tr>
                         ))
