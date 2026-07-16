@@ -6,6 +6,8 @@ const MyCourses = () => {
   const [courses, setCourses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [semesterPreference, setSemesterPreference] = useState('First');
+  const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(false);
+  const [adminSemesterLoaded, setAdminSemesterLoaded] = useState(false);
   const user = JSON.parse(localStorage.getItem('user'));
 
   useEffect(() => {
@@ -15,7 +17,7 @@ const MyCourses = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Get student's enrolled course IDs and semester preference
+      // 1. Get student's enrolled course IDs and semester preference
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses, semester_preference')
@@ -24,9 +26,45 @@ const MyCourses = () => {
 
       if (userError) throw userError;
 
-      const pref = userData?.semester_preference || 'First';
+      // 2. Get admin's semester preference (from admin user)
+      // First, get the admin user ID
+      const { data: adminData, error: adminError } = await supabase
+        .from('users')
+        .select('id, semester_preference')
+        .eq('role', 'admin')
+        .limit(1)
+        .single();
+
+      if (adminError) {
+        console.error('Error fetching admin semester preference:', adminError);
+        // Default to false if admin not found
+        setSecondSemesterEnabled(false);
+      } else {
+        // Check if admin has second semester enabled
+        const adminPref = adminData?.semester_preference || 'First';
+        setSecondSemesterEnabled(adminPref === 'Second');
+      }
+      setAdminSemesterLoaded(true);
+
+      // 3. Get student's semester preference
+      let pref = userData?.semester_preference || 'First';
+      
+      // If second semester is OFF in admin, force student to First semester
+      if (secondSemesterEnabled === false && pref === 'Second') {
+        pref = 'First';
+        // Update student's preference to match admin
+        await supabase
+          .from('users')
+          .update({ semester_preference: 'First' })
+          .eq('id', user.id);
+        
+        const updatedUser = { ...user, semester_preference: 'First' };
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+      }
+      
       setSemesterPreference(pref);
 
+      // 4. Fetch courses
       if (userData?.enrolled_courses?.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
           .from('courses')
@@ -40,13 +78,19 @@ const MyCourses = () => {
       }
 
     } catch (error) {
-      console.error('Error fetching courses:', error);
+      console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleSemesterSwitch = async (semester) => {
+    // Check if second semester is enabled by admin
+    if (semester === 'Second' && !secondSemesterEnabled) {
+      alert('⚠️ Second semester is currently not available. Please contact the administrator.');
+      return;
+    }
+
     setSemesterPreference(semester);
     
     try {
@@ -65,8 +109,17 @@ const MyCourses = () => {
     }
   };
 
-  // Filter courses by selected semester
-  const filteredCourses = courses.filter(c => c.semester === semesterPreference);
+  // Filter courses by selected semester (only if second semester is enabled)
+  const filteredCourses = courses.filter(c => {
+    // If student is trying to view second semester but admin has it OFF
+    if (semesterPreference === 'Second' && !secondSemesterEnabled) {
+      return false;
+    }
+    return c.semester === semesterPreference;
+  });
+
+  // Check if student has any second semester courses
+  const hasSecondSemesterCourses = courses.some(c => c.semester === 'Second');
 
   if (loading) {
     return (
@@ -91,13 +144,45 @@ const MyCourses = () => {
                 const newSemester = e.target.checked ? 'Second' : 'First';
                 handleSemesterSwitch(newSemester);
               }}
+              disabled={!secondSemesterEnabled || !hasSecondSemesterCourses}
             />
+            {!secondSemesterEnabled && (
+              <small className="text-muted d-block text-end">
+                ⚠️ Second semester is currently disabled by admin
+              </small>
+            )}
+            {secondSemesterEnabled && !hasSecondSemesterCourses && (
+              <small className="text-muted d-block text-end">
+                ℹ️ No second semester courses available
+              </small>
+            )}
           </div>
         </div>
 
         {courses.length === 0 ? (
           <Alert variant="info">
             You are not enrolled in any courses yet. Please contact your lecturer or admin.
+          </Alert>
+        ) : semesterPreference === 'Second' && !secondSemesterEnabled ? (
+          <Alert variant="warning">
+            <strong>⚠️ Second Semester Not Available</strong>
+            <br />
+            The second semester has not been opened by the administrator yet. 
+            Please check back later or contact your admin for more information.
+            <br />
+            <br />
+            <Button 
+              variant="outline-primary" 
+              size="sm"
+              onClick={() => handleSemesterSwitch('First')}
+            >
+              Switch to First Semester
+            </Button>
+          </Alert>
+        ) : filteredCourses.length === 0 && semesterPreference === 'Second' ? (
+          <Alert variant="info">
+            You have no courses for <strong>Second Semester</strong>. 
+            Please switch to First Semester to view your courses.
           </Alert>
         ) : filteredCourses.length === 0 ? (
           <Alert variant="warning">
@@ -133,10 +218,18 @@ const MyCourses = () => {
         {/* Summary */}
         <Card className="mt-4 p-3 shadow-sm" style={{ borderRadius: '15px' }}>
           <Row>
-            <Col md={12}>
+            <Col md={6}>
               <div className="text-center">
                 <h4>{filteredCourses.length}</h4>
-                <p className="text-muted">Total Courses in {semesterPreference} Semester</p>
+                <p className="text-muted">Courses in {semesterPreference} Semester</p>
+              </div>
+            </Col>
+            <Col md={6}>
+              <div className="text-center">
+                <h4 style={{ color: secondSemesterEnabled ? '#28a745' : '#dc3545' }}>
+                  {secondSemesterEnabled ? '✅ ON' : '❌ OFF'}
+                </h4>
+                <p className="text-muted">Second Semester Status</p>
               </div>
             </Col>
           </Row>
