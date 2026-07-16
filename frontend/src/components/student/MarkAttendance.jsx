@@ -18,6 +18,7 @@ const MarkAttendance = () => {
   const [debugMessages, setDebugMessages] = useState([]);
   const [faceMatched, setFaceMatched] = useState(false);
   const [absentDebug, setAbsentDebug] = useState([]);
+  const [absentCheckDone, setAbsentCheckDone] = useState(false);
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -52,10 +53,12 @@ const MarkAttendance = () => {
       await fetchTodayAttendance();
       await fetchCourseStatuses();
       
-      // Run absent check after everything is loaded
+      // ✅ FIX: Run absent check AFTER courses are loaded
+      // Using setTimeout to ensure all states are updated
       setTimeout(async () => {
         await markAbsentForOffCourses();
-      }, 1000);
+        setAbsentCheckDone(true);
+      }, 2000);
       
       addDebug('✅ Initialization complete');
     };
@@ -202,7 +205,7 @@ const MarkAttendance = () => {
     }
   };
 
-  // ✅ DEBUGGING VERSION: Mark absent with full logging
+  // ✅ FIXED: Mark absent with auto-run
   const markAbsentForOffCourses = async () => {
     try {
       addDebug('🔵 ===== STARTING ABSENT CHECK =====');
@@ -227,7 +230,6 @@ const MarkAttendance = () => {
       let notApplicableCount = 0;
       let errorCount = 0;
       
-      // Log all courses and their status
       addAbsentDebug('📋 Course Status Summary:');
       
       for (let course of courses) {
@@ -241,7 +243,6 @@ const MarkAttendance = () => {
         let shouldMark = false;
         let reason = '';
         
-        // Determine status
         if (isPresent) {
           statusLabel = '✅ ALREADY PRESENT';
           alreadyMarkedCount++;
@@ -269,7 +270,6 @@ const MarkAttendance = () => {
         
         addAbsentDebug(`   ${course.course_code}: ${statusLabel} (isActive: ${isActive}, attEnabled: ${attEnabled}, wasOn: ${!!wasOn})`);
         
-        // Check if already has attendance record
         if (!isPresent && shouldMark) {
           const { data: existing, error: checkError } = await supabase
             .from('attendance')
@@ -290,7 +290,6 @@ const MarkAttendance = () => {
             continue;
           }
 
-          // ✅ MARK AS ABSENT
           addAbsentDebug(`   📝 INSERTING ABSENT for ${course.course_code} (${reason})`);
           
           try {
@@ -319,7 +318,6 @@ const MarkAttendance = () => {
         }
       }
       
-      // Summary
       addAbsentDebug('📊 ==== ABSENT CHECK SUMMARY ====');
       addAbsentDebug(`✅ New Absents: ${absentCount}`);
       addAbsentDebug(`⏳ Already Marked: ${alreadyMarkedCount}`);
@@ -334,7 +332,6 @@ const MarkAttendance = () => {
         addDebug(`ℹ️ No new absent courses to mark`);
       }
       
-      // Refresh today's attendance
       await fetchTodayAttendance();
       
     } catch (error) {
@@ -511,7 +508,6 @@ const MarkAttendance = () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
-      // Check if there's an absent record to update
       const { data: existingAbsent } = await supabase
         .from('attendance')
         .select('id')
@@ -559,7 +555,6 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
-      // Auto-select next available course
       const availableCourses = courses.filter(c => {
         const status = getCourseStatus(c);
         return status.canMark && !updatedMarked.includes(c.id);
@@ -592,7 +587,6 @@ const MarkAttendance = () => {
     return courses.find(c => c.id === selectedCourse);
   };
 
-  // Separate courses by status
   const lecturingCourses = courses.filter(c => {
     const status = getCourseStatus(c);
     return status.canMark && !todayAttendance.includes(c.id);
@@ -626,7 +620,11 @@ const MarkAttendance = () => {
         {/* 🔍 ABSENT DEBUG PANEL */}
         <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
           <div className="d-flex justify-content-between align-items-center">
-            <h6 className="mb-0">📊 Absent Debug Log ({absentDebug.length} messages)</h6>
+            <h6 className="mb-0">
+              📊 Absent Debug Log ({absentDebug.length} messages) 
+              {absentCheckDone && <Badge bg="success" className="ms-2">✅ Auto-checked</Badge>}
+              {!absentCheckDone && <Badge bg="warning" className="ms-2">⏳ Checking...</Badge>}
+            </h6>
             <div>
               <Button 
                 variant="outline-primary" 
