@@ -19,6 +19,7 @@ const MarkAttendance = () => {
   const [faceMatched, setFaceMatched] = useState(false);
   const [absentDebug, setAbsentDebug] = useState([]);
   const [absentCheckDone, setAbsentCheckDone] = useState(false);
+  const [attendanceRefreshKey, setAttendanceRefreshKey] = useState(0);
   const videoRef = useRef(null);
   const user = JSON.parse(localStorage.getItem('user'));
 
@@ -26,43 +27,30 @@ const MarkAttendance = () => {
     const timestamp = new Date().toLocaleTimeString();
     const entry = { timestamp, message, isError };
     setDebugMessages(prev => [...prev, entry]);
-    if (isError) {
-      console.error(`[${timestamp}] ❌ ${message}`);
-    } else {
-      console.log(`[${timestamp}] ${message}`);
-    }
+    console.log(`[${timestamp}] ${message}`);
   };
 
   const addAbsentDebug = (message, data = null) => {
     const timestamp = new Date().toLocaleTimeString();
     const entry = { timestamp, message, data: data ? JSON.stringify(data, null, 2) : null };
     setAbsentDebug(prev => [...prev, entry]);
-    console.log(`[${timestamp}] 📊 ABSENT DEBUG: ${message}`, data || '');
+    console.log(`[${timestamp}] 📊 ${message}`, data || '');
   };
 
+  // ✅ FIX: Separate data loading and absent check
   useEffect(() => {
-    const init = async () => {
-      addDebug('🔵 MarkAttendance: Initializing...');
+    const loadData = async () => {
+      addDebug('🔵 MarkAttendance: Loading data...');
       
       await loadModels();
       setModelsReady(true);
       setModelsLoading(false);
       
       await startWebcam();
-      
-      // ✅ FIX: Wait for ALL data to load before running absent check
-      await fetchCourses();
-      await fetchTodayAttendance();
-      await fetchCourseStatuses();
-      
-      // ✅ FIX: Run absent check AFTER all data is loaded
-      await markAbsentForOffCourses();
-      setAbsentCheckDone(true);
-      
-      addDebug('✅ Initialization complete');
+      await loadAllData();
     };
     
-    init();
+    loadData();
 
     return () => {
       if (videoRef.current && videoRef.current.srcObject) {
@@ -70,6 +58,29 @@ const MarkAttendance = () => {
       }
     };
   }, []);
+
+  // ✅ FIX: Run absent check whenever courses change or refresh key changes
+  useEffect(() => {
+    const runAbsentCheck = async () => {
+      if (courses.length > 0) {
+        addDebug(`🔵 Running absent check with ${courses.length} courses`);
+        await markAbsentForOffCourses();
+        setAbsentCheckDone(true);
+      } else {
+        addDebug('⏳ Waiting for courses to load...');
+      }
+    };
+    
+    runAbsentCheck();
+  }, [courses, attendanceRefreshKey]);
+
+  const loadAllData = async () => {
+    await fetchCourses();
+    await fetchTodayAttendance();
+    await fetchCourseStatuses();
+    // Trigger absent check
+    setAttendanceRefreshKey(prev => prev + 1);
+  };
 
   const startWebcam = async () => {
     try {
@@ -92,7 +103,7 @@ const MarkAttendance = () => {
 
   const fetchCourses = async () => {
     try {
-      addDebug('🔵 Fetching enrolled courses for: ' + user?.email);
+      addDebug('🔵 Fetching enrolled courses...');
       
       const { data: userData, error: userError } = await supabase
         .from('users')
@@ -107,7 +118,7 @@ const MarkAttendance = () => {
 
       let enrolledIds = userData?.enrolled_courses || [];
       enrolledIds = [...new Set(enrolledIds)];
-      addDebug(`📋 Enrolled course IDs: ${enrolledIds.length} course(s)`);
+      addDebug(`📋 Enrolled course IDs: ${enrolledIds.length}`);
 
       if (enrolledIds.length > 0) {
         const { data: coursesData, error: courseError } = await supabase
@@ -120,13 +131,13 @@ const MarkAttendance = () => {
           throw courseError;
         }
         
-        addDebug(`✅ Courses fetched: ${coursesData?.length || 0} courses`);
+        addDebug(`✅ Courses fetched: ${coursesData?.length || 0}`);
         setCourses(coursesData || []);
         
       } else {
         addDebug('⚠️ No enrolled courses found');
         setCourses([]);
-        setMessage('ℹ️ You are not enrolled in any courses. Please contact your lecturer.');
+        setMessage('ℹ️ You are not enrolled in any courses.');
         setMessageType('info');
       }
     } catch (error) {
@@ -155,12 +166,7 @@ const MarkAttendance = () => {
       
       const presentCourses = (data || []).filter(a => a.status === 'present').map(a => a.course_id);
       setTodayAttendance(presentCourses);
-      addDebug(`✅ Today's present: ${presentCourses.length} course(s)`);
-      
-      const absentRecords = (data || []).filter(a => a.status === 'absent');
-      if (absentRecords.length > 0) {
-        addDebug(`⚠️ Found ${absentRecords.length} existing absent records`);
-      }
+      addDebug(`✅ Today's present: ${presentCourses.length}`);
       
       return data || [];
       
@@ -172,7 +178,7 @@ const MarkAttendance = () => {
 
   const fetchCourseStatuses = async () => {
     try {
-      addDebug('🔵 Fetching course statuses for today...');
+      addDebug('🔵 Fetching course statuses...');
       const today = new Date().toISOString().split('T')[0];
       
       const { data, error } = await supabase
@@ -194,21 +200,20 @@ const MarkAttendance = () => {
         };
       });
       setCourseStatuses(statusMap);
-      addDebug(`✅ Course statuses fetched: ${Object.keys(statusMap).length} course(s)`);
+      addDebug(`✅ Course statuses: ${Object.keys(statusMap).length}`);
       
     } catch (error) {
       addDebug('❌ Error fetching course statuses: ' + error.message, true);
     }
   };
 
-  // ✅ FIXED: Mark absent - runs after all data is loaded
   const markAbsentForOffCourses = async () => {
     try {
       addDebug('🔵 ===== STARTING ABSENT CHECK =====');
       addAbsentDebug('🚀 Starting absent check...');
       
       if (courses.length === 0) {
-        addDebug('⚠️ No courses loaded yet, skipping absent check');
+        addDebug('⚠️ No courses loaded yet');
         addAbsentDebug('⚠️ No courses loaded yet');
         return;
       }
@@ -218,8 +223,6 @@ const MarkAttendance = () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayStr = today.toISOString();
-      
-      addAbsentDebug(`📅 Today: ${todayStr}`);
       
       let absentCount = 0;
       let alreadyMarkedCount = 0;
@@ -244,26 +247,26 @@ const MarkAttendance = () => {
         } else if (isActive === false) {
           statusLabel = '⏳ INACTIVE';
           shouldMark = true;
-          reason = 'Course Inactive';
+          reason = 'Inactive';
         } else if (attEnabled === false && wasOn) {
           statusLabel = '❌ CLASS ENDED';
           shouldMark = true;
-          reason = 'Class Ended (was ON, now OFF)';
+          reason = 'Class Ended';
         } else if (attEnabled === false && !wasOn) {
           statusLabel = '⏳ NOT STARTED';
           shouldMark = false;
-          reason = 'Not Started Yet';
+          reason = 'Not Started';
         } else if (attEnabled === true) {
-          statusLabel = '📖 ACTIVE (LECTURING)';
+          statusLabel = '📖 ACTIVE';
           shouldMark = false;
-          reason = 'Currently ON';
+          reason = 'Active';
         } else {
           statusLabel = '❓ UNKNOWN';
           shouldMark = false;
-          reason = 'Unknown status';
+          reason = 'Unknown';
         }
         
-        addAbsentDebug(`   ${course.course_code}: ${statusLabel} (isActive: ${isActive}, attEnabled: ${attEnabled}, wasOn: ${!!wasOn})`);
+        addAbsentDebug(`   ${course.course_code}: ${statusLabel}`);
         
         if (!isPresent && shouldMark) {
           const { data: existing, error: checkError } = await supabase
@@ -274,18 +277,18 @@ const MarkAttendance = () => {
             .gte('date', todayStr);
 
           if (checkError) {
-            addAbsentDebug(`   ❌ Check error for ${course.course_code}: ${checkError.message}`);
+            addAbsentDebug(`   ❌ Check error: ${checkError.message}`);
             errorCount++;
             continue;
           }
 
           if (existing && existing.length > 0) {
-            addAbsentDebug(`   ⏳ ${course.course_code} already has record (${existing[0].status})`);
+            addAbsentDebug(`   ⏳ Already has record (${existing[0].status})`);
             alreadyMarkedCount++;
             continue;
           }
 
-          addAbsentDebug(`   📝 INSERTING ABSENT for ${course.course_code} (${reason})`);
+          addAbsentDebug(`   📝 INSERTING ABSENT for ${course.course_code}`);
           
           try {
             const { error: insertError } = await supabase
@@ -298,29 +301,29 @@ const MarkAttendance = () => {
               });
 
             if (insertError) {
-              addAbsentDebug(`   ❌ INSERT ERROR for ${course.course_code}: ${insertError.message}`, true);
+              addAbsentDebug(`   ❌ INSERT ERROR: ${insertError.message}`, true);
               errorCount++;
             } else {
-              addAbsentDebug(`   ✅ SUCCESS: Marked ABSENT for ${course.course_code}`);
+              addAbsentDebug(`   ✅ SUCCESS: Marked ABSENT`);
               absentCount++;
             }
           } catch (err) {
-            addAbsentDebug(`   ❌ EXCEPTION for ${course.course_code}: ${err.message}`, true);
+            addAbsentDebug(`   ❌ EXCEPTION: ${err.message}`, true);
             errorCount++;
           }
         }
       }
       
-      addAbsentDebug('📊 ==== ABSENT CHECK SUMMARY ====');
+      addAbsentDebug('📊 ==== SUMMARY ====');
       addAbsentDebug(`✅ New Absents: ${absentCount}`);
       addAbsentDebug(`⏳ Already Marked: ${alreadyMarkedCount}`);
       addAbsentDebug(`❌ Errors: ${errorCount}`);
       
       if (absentCount > 0) {
         addDebug(`✅ Marked ${absentCount} course(s) as ABSENT`);
+        // Refresh attendance
+        await fetchTodayAttendance();
       }
-      
-      await fetchTodayAttendance();
       
     } catch (error) {
       addDebug('❌ Error marking absent: ' + error.message, true);
@@ -385,7 +388,7 @@ const MarkAttendance = () => {
     };
   };
 
-  // ✅ FIXED: Handle marking attendance with proper refresh
+  // ✅ FIXED: Handle marking attendance with proper duplicate prevention
   const handleMarkAttendance = async () => {
     if (!selectedCourse) {
       setMessage('⚠️ Please select a course.');
@@ -402,6 +405,7 @@ const MarkAttendance = () => {
       return;
     }
 
+    // ✅ FIX: Check if already marked BEFORE face recognition
     if (todayAttendance.includes(selectedCourse)) {
       setMessage('⚠️ You have already marked attendance for this course today.');
       setMessageType('warning');
@@ -424,7 +428,7 @@ const MarkAttendance = () => {
     setMessage('');
     setMessageType('');
     setFaceMatched(false);
-    addDebug('📸 Starting attendance marking for course: ' + selectedCourse);
+    addDebug('📸 Starting attendance marking: ' + selectedCourse);
 
     try {
       const liveDescriptor = await getFaceDescriptor(videoRef.current);
@@ -449,10 +453,10 @@ const MarkAttendance = () => {
       }
 
       const storedDescriptors = userData.face_descriptors || [];
-      addDebug(`📋 Found ${storedDescriptors.length} stored face samples`);
+      addDebug(`📋 Found ${storedDescriptors.length} face samples`);
       
       if (storedDescriptors.length === 0) {
-        setMessage('❌ No face samples found. Please re-register with face enrolment.');
+        setMessage('❌ No face samples found. Please re-register.');
         setMessageType('danger');
         addDebug('❌ No face samples found');
         setIsMarking(false);
@@ -470,34 +474,36 @@ const MarkAttendance = () => {
       }
 
       if (!matched) {
-        setMessage('❌ Face does not match your registered profile. Please try again.');
+        setMessage('❌ Face does not match your registered profile.');
         setMessageType('danger');
-        addDebug('❌ Face did not match any stored sample');
+        addDebug('❌ Face did not match');
         setIsMarking(false);
         return;
       }
 
-      if (todayAttendance.includes(selectedCourse)) {
+      // ✅ DOUBLE CHECK: Verify again in case state changed
+      const { data: latestAttendance } = await supabase
+        .from('attendance')
+        .select('id')
+        .eq('student_id', user.id)
+        .eq('course_id', selectedCourse)
+        .eq('status', 'present')
+        .gte('date', new Date().toISOString().split('T')[0]);
+
+      if (latestAttendance && latestAttendance.length > 0) {
         setMessage('⚠️ You have already marked attendance for this course today.');
         setMessageType('warning');
-        addDebug('⚠️ Already marked today');
+        addDebug('⚠️ Already marked (database check)');
         setIsMarking(false);
-        return;
-      }
-
-      const currentCourse = courses.find(c => c.id === selectedCourse);
-      const currentStatus = getCourseStatus(currentCourse);
-      if (!currentStatus.canMark) {
-        setMessage('⏳ This course is no longer accepting attendance.');
-        setMessageType('warning');
-        setIsMarking(false);
+        // Refresh state
+        await fetchTodayAttendance();
         return;
       }
 
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
-      // ✅ FIX: Check for existing absent record to update
+      // Check for existing absent record
       const { data: existingAbsent } = await supabase
         .from('attendance')
         .select('id')
@@ -507,6 +513,7 @@ const MarkAttendance = () => {
         .gte('date', today.toISOString());
 
       if (existingAbsent && existingAbsent.length > 0) {
+        // Update absent to present
         const { error: updateError } = await supabase
           .from('attendance')
           .update({ status: 'present' })
@@ -518,6 +525,7 @@ const MarkAttendance = () => {
         }
         addDebug('✅ Updated absent to present');
       } else {
+        // Insert new present record
         const { error: insertError } = await supabase
           .from('attendance')
           .insert({
@@ -531,16 +539,23 @@ const MarkAttendance = () => {
           addDebug('❌ Insert error: ' + insertError.message, true);
           throw insertError;
         }
+        addDebug('✅ Inserted present record');
       }
 
-      // ✅ FIX: Update local state AND refresh from database
-      const updatedMarked = [...todayAttendance, selectedCourse];
-      setTodayAttendance(updatedMarked);
-      
-      // ✅ FIX: Refresh attendance data from database to ensure sync
+      // ✅ FIX: Refresh all data after marking
       await fetchTodayAttendance();
+      await fetchCourseStatuses();
       
-      addDebug('✅ Attendance saved successfully');
+      // ✅ FIX: Update local state with refreshed data
+      const updatedPresent = await supabase
+        .from('attendance')
+        .select('course_id')
+        .eq('student_id', user.id)
+        .eq('status', 'present')
+        .gte('date', today.toISOString());
+      
+      const newMarked = (updatedPresent.data || []).map(a => a.course_id);
+      setTodayAttendance(newMarked);
 
       setMessage('✅ Attendance marked successfully! ✓');
       setMessageType('success');
@@ -553,19 +568,19 @@ const MarkAttendance = () => {
       // Auto-select next available course
       const availableCourses = courses.filter(c => {
         const status = getCourseStatus(c);
-        return status.canMark && !todayAttendance.includes(c.id);
+        return status.canMark && !newMarked.includes(c.id);
       });
       
       if (availableCourses.length > 0) {
         setTimeout(() => {
           setSelectedCourse(availableCourses[0].id);
-          addDebug(`🔄 Auto-selected next: ${availableCourses[0].course_code}`);
+          addDebug(`🔄 Auto-selected: ${availableCourses[0].course_code}`);
           setFaceMatched(false);
         }, 1500);
       } else {
         setTimeout(() => {
           setSelectedCourse('');
-          addDebug('✅ All available courses marked today!');
+          addDebug('✅ All courses marked today!');
           setFaceMatched(false);
         }, 1500);
       }
@@ -605,8 +620,9 @@ const MarkAttendance = () => {
     return status.status === 'inactive' && !todayAttendance.includes(c.id);
   });
 
-  const allAvailableCourses = lecturingCourses.length + markedCourses.length + endedCourses.length + notStartedCourses.length + inactiveCourses.length;
-  const progressPercentage = allAvailableCourses > 0 ? Math.round((markedCourses.length / (lecturingCourses.length + markedCourses.length)) * 100) : 0;
+  const progressPercentage = (lecturingCourses.length + markedCourses.length) > 0 
+    ? Math.round((markedCourses.length / (lecturingCourses.length + markedCourses.length)) * 100) 
+    : 0;
 
   return (
     <Container className="mt-4">
@@ -616,18 +632,22 @@ const MarkAttendance = () => {
         <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
           <div className="d-flex justify-content-between align-items-center">
             <h6 className="mb-0">
-              📊 Absent Debug Log ({absentDebug.length} messages) 
-              {absentCheckDone && <Badge bg="success" className="ms-2">✅ Auto-checked</Badge>}
-              {!absentCheckDone && <Badge bg="warning" className="ms-2">⏳ Checking...</Badge>}
+              📊 Debug ({absentDebug.length} messages) 
+              {absentCheckDone && <Badge bg="success" className="ms-2">✅ Done</Badge>}
+              {!absentCheckDone && <Badge bg="warning" className="ms-2">⏳ Loading...</Badge>}
             </h6>
             <div>
               <Button 
                 variant="outline-primary" 
                 size="sm" 
                 className="me-1"
-                onClick={() => {
+                onClick={async () => {
                   setAbsentDebug([]);
-                  markAbsentForOffCourses();
+                  await fetchCourses();
+                  await fetchTodayAttendance();
+                  await fetchCourseStatuses();
+                  await markAbsentForOffCourses();
+                  setAbsentCheckDone(true);
                 }}
               >
                 🔄 Re-run
@@ -643,7 +663,7 @@ const MarkAttendance = () => {
           </div>
           <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
             {absentDebug.length === 0 ? (
-              <div className="text-muted">Waiting for absent check...</div>
+              <div className="text-muted">Waiting...</div>
             ) : (
               absentDebug.map((msg, idx) => (
                 <div key={idx} style={{ 
@@ -813,14 +833,14 @@ const MarkAttendance = () => {
                         disabled={isMarking}
                         style={{ fontSize: '1rem', padding: '10px', borderRadius: '10px', borderColor: '#28a745' }}
                       >
-                        <option value="">-- Select Course --</option>
+                        <option value="">-- Select --</option>
                         {lecturingCourses.map((course) => (
                           <option key={course.id} value={course.id}>
                             {course.course_code} - {course.course_name} 📖
                           </option>
                         ))}
                       </Form.Select>
-                      <small className="text-muted">These courses are currently lecturing.</small>
+                      <small className="text-muted">Currently lecturing</small>
                     </div>
                   )}
 
@@ -853,14 +873,14 @@ const MarkAttendance = () => {
                           </div>
                         ))}
                       </div>
-                      <small className="text-muted">You missed these courses.</small>
+                      <small className="text-muted">Class ended</small>
                     </div>
                   )}
 
                   {notStartedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#ffc107' }}>
-                        ⏳ Not Started Yet ({notStartedCourses.length})
+                        ⏳ Not Started ({notStartedCourses.length})
                       </Form.Label>
                       <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #ffc107', borderRadius: '10px', background: '#fff8e1' }}>
                         {notStartedCourses.map((course) => (
@@ -870,7 +890,7 @@ const MarkAttendance = () => {
                           </div>
                         ))}
                       </div>
-                      <small className="text-muted">These courses haven't started yet.</small>
+                      <small className="text-muted">Not started yet</small>
                     </div>
                   )}
 
@@ -908,8 +928,8 @@ const MarkAttendance = () => {
                   {lecturingCourses.length === 0 && markedCourses.length === 0 && courses.length > 0 && (
                     <div className="text-center py-3">
                       <div style={{ fontSize: '40px' }}>⏳</div>
-                      <p className="text-muted mt-2">No courses are currently available.</p>
-                      <small className="text-muted">Check back later.</small>
+                      <p className="text-muted mt-2">No courses available</p>
+                      <small className="text-muted">Check back later</small>
                     </div>
                   )}
                 </>
