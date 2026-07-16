@@ -38,6 +38,7 @@ const MarkAttendance = () => {
       await fetchCourses();
       await fetchTodayAttendance();
       await fetchCourseStatuses();
+      await markAbsentForOffCourses();
       
       addDebug('✅ Initialization complete');
     };
@@ -173,9 +174,76 @@ const MarkAttendance = () => {
     }
   };
 
+  const markAbsentForOffCourses = async () => {
+    try {
+      addDebug('🔵 Checking for absent courses...');
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      // Get all courses that are OFF or Inactive
+      const offCourses = courses.filter(c => c.is_active === false || c.attendance_enabled === false);
+      
+      let absentCount = 0;
+      
+      for (let course of offCourses) {
+        // Check if already has attendance record today
+        const { data: existing, error: checkError } = await supabase
+          .from('attendance')
+          .select('id, status')
+          .eq('student_id', user.id)
+          .eq('course_id', course.id)
+          .gte('date', today.toISOString());
+
+        if (checkError) {
+          console.error('Error checking attendance:', checkError);
+          continue;
+        }
+
+        // If no record exists, mark as absent
+        if (!existing || existing.length === 0) {
+          const { error: insertError } = await supabase
+            .from('attendance')
+            .insert({
+              student_id: user.id,
+              course_id: course.id,
+              status: 'absent',
+              date: today
+            });
+
+          if (insertError) {
+            console.error('Error marking absent:', insertError);
+          } else {
+            absentCount++;
+            addDebug(`✅ Marked absent for: ${course.course_code}`);
+          }
+        }
+      }
+
+      if (absentCount > 0) {
+        addDebug(`✅ Marked ${absentCount} course(s) as absent`);
+      }
+      
+      // Refresh today's attendance
+      await fetchTodayAttendance();
+      
+    } catch (error) {
+      addDebug('❌ Error marking absent: ' + error.message, true);
+    }
+  };
+
   const getCourseStatus = (course) => {
     const status = courseStatuses[course.id];
     const isMarked = todayAttendance.includes(course.id);
+    
+    // If already marked present
+    if (isMarked) {
+      return { 
+        status: 'marked', 
+        label: '✅ Already Marked', 
+        color: 'success',
+        canMark: false 
+      };
+    }
     
     // If course is inactive
     if (course.is_active === false) {
@@ -191,7 +259,7 @@ const MarkAttendance = () => {
     if (course.attendance_enabled === false) {
       // Check if it was ever turned ON today
       if (status && status.turned_on_at) {
-        // It was turned ON at some point but now OFF
+        // It was turned ON at some point but now OFF → Student missed it
         return { 
           status: 'ended', 
           label: '❌ Class Ended', 
@@ -338,18 +406,44 @@ const MarkAttendance = () => {
         return;
       }
 
-      // Insert present record
-      const { error: insertError } = await supabase
+      // Check if there's an absent record to update to present
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const { data: existingAbsent } = await supabase
         .from('attendance')
-        .insert({
-          student_id: user.id,
-          course_id: selectedCourse,
-          status: 'present'
-        });
+        .select('id')
+        .eq('student_id', user.id)
+        .eq('course_id', selectedCourse)
+        .eq('status', 'absent')
+        .gte('date', today.toISOString());
 
-      if (insertError) {
-        addDebug('❌ Insert error: ' + insertError.message, true);
-        throw insertError;
+      if (existingAbsent && existingAbsent.length > 0) {
+        // Update absent to present
+        const { error: updateError } = await supabase
+          .from('attendance')
+          .update({ status: 'present' })
+          .eq('id', existingAbsent[0].id);
+
+        if (updateError) {
+          addDebug('❌ Update error: ' + updateError.message, true);
+          throw updateError;
+        }
+        addDebug('✅ Updated absent to present');
+      } else {
+        // Insert new present record
+        const { error: insertError } = await supabase
+          .from('attendance')
+          .insert({
+            student_id: user.id,
+            course_id: selectedCourse,
+            status: 'present',
+            date: today
+          });
+
+        if (insertError) {
+          addDebug('❌ Insert error: ' + insertError.message, true);
+          throw insertError;
+        }
       }
 
       const updatedMarked = [...todayAttendance, selectedCourse];
@@ -421,7 +515,7 @@ const MarkAttendance = () => {
   });
 
   const allAvailableCourses = lecturingCourses.length + markedCourses.length + endedCourses.length + notStartedCourses.length + inactiveCourses.length;
-  const progressPercentage = allAvailableCourses > 0 ? Math.round((markedCourses.length / allAvailableCourses) * 100) : 0;
+  const progressPercentage = allAvailableCourses > 0 ? Math.round((markedCourses.length / (lecturingCourses.length + markedCourses.length)) * 100) : 0;
 
   return (
     <Container className="mt-4">
@@ -545,7 +639,7 @@ const MarkAttendance = () => {
               <h5 className="mb-3">📚 Course Selection</h5>
 
               {/* Progress Bar */}
-              {allAvailableCourses > 0 && (
+              {(lecturingCourses.length + markedCourses.length) > 0 && (
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
                     <span className="small">Today's Progress</span>
