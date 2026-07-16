@@ -37,7 +37,6 @@ const MarkAttendance = () => {
     console.log(`[${timestamp}] 📊 ${message}`, data || '');
   };
 
-  // ✅ FIX: Separate data loading and absent check
   useEffect(() => {
     const loadData = async () => {
       addDebug('🔵 MarkAttendance: Loading data...');
@@ -59,7 +58,6 @@ const MarkAttendance = () => {
     };
   }, []);
 
-  // ✅ FIX: Run absent check whenever courses change or refresh key changes
   useEffect(() => {
     const runAbsentCheck = async () => {
       if (courses.length > 0) {
@@ -78,7 +76,6 @@ const MarkAttendance = () => {
     await fetchCourses();
     await fetchTodayAttendance();
     await fetchCourseStatuses();
-    // Trigger absent check
     setAttendanceRefreshKey(prev => prev + 1);
   };
 
@@ -228,8 +225,6 @@ const MarkAttendance = () => {
       let alreadyMarkedCount = 0;
       let errorCount = 0;
       
-      addAbsentDebug('📋 Course Status Summary:');
-      
       for (let course of courses) {
         const isPresent = todayAttendance.includes(course.id);
         const status = courseStatuses[course.id];
@@ -237,36 +232,24 @@ const MarkAttendance = () => {
         const attEnabled = course.attendance_enabled;
         const wasOn = status && status.turned_on_at;
         
-        let statusLabel = '';
         let shouldMark = false;
         let reason = '';
         
         if (isPresent) {
-          statusLabel = '✅ ALREADY PRESENT';
           alreadyMarkedCount++;
         } else if (isActive === false) {
-          statusLabel = '⏳ INACTIVE';
           shouldMark = true;
           reason = 'Inactive';
         } else if (attEnabled === false && wasOn) {
-          statusLabel = '❌ CLASS ENDED';
           shouldMark = true;
           reason = 'Class Ended';
         } else if (attEnabled === false && !wasOn) {
-          statusLabel = '⏳ NOT STARTED';
           shouldMark = false;
           reason = 'Not Started';
         } else if (attEnabled === true) {
-          statusLabel = '📖 ACTIVE';
           shouldMark = false;
           reason = 'Active';
-        } else {
-          statusLabel = '❓ UNKNOWN';
-          shouldMark = false;
-          reason = 'Unknown';
         }
-        
-        addAbsentDebug(`   ${course.course_code}: ${statusLabel}`);
         
         if (!isPresent && shouldMark) {
           const { data: existing, error: checkError } = await supabase
@@ -277,19 +260,15 @@ const MarkAttendance = () => {
             .gte('date', todayStr);
 
           if (checkError) {
-            addAbsentDebug(`   ❌ Check error: ${checkError.message}`);
             errorCount++;
             continue;
           }
 
           if (existing && existing.length > 0) {
-            addAbsentDebug(`   ⏳ Already has record (${existing[0].status})`);
             alreadyMarkedCount++;
             continue;
           }
 
-          addAbsentDebug(`   📝 INSERTING ABSENT for ${course.course_code}`);
-          
           try {
             const { error: insertError } = await supabase
               .from('attendance')
@@ -301,14 +280,11 @@ const MarkAttendance = () => {
               });
 
             if (insertError) {
-              addAbsentDebug(`   ❌ INSERT ERROR: ${insertError.message}`, true);
               errorCount++;
             } else {
-              addAbsentDebug(`   ✅ SUCCESS: Marked ABSENT`);
               absentCount++;
             }
           } catch (err) {
-            addAbsentDebug(`   ❌ EXCEPTION: ${err.message}`, true);
             errorCount++;
           }
         }
@@ -321,13 +297,11 @@ const MarkAttendance = () => {
       
       if (absentCount > 0) {
         addDebug(`✅ Marked ${absentCount} course(s) as ABSENT`);
-        // Refresh attendance
         await fetchTodayAttendance();
       }
       
     } catch (error) {
       addDebug('❌ Error marking absent: ' + error.message, true);
-      addAbsentDebug(`❌ FATAL ERROR: ${error.message}`, true);
     }
   };
 
@@ -347,7 +321,7 @@ const MarkAttendance = () => {
     if (course.is_active === false) {
       return { 
         status: 'inactive', 
-        label: '⏳ Course Inactive', 
+        label: '⏳ Inactive', 
         color: 'secondary',
         canMark: false 
       };
@@ -388,7 +362,6 @@ const MarkAttendance = () => {
     };
   };
 
-  // ✅ FIXED: Handle marking attendance with proper duplicate prevention
   const handleMarkAttendance = async () => {
     if (!selectedCourse) {
       setMessage('⚠️ Please select a course.');
@@ -405,7 +378,6 @@ const MarkAttendance = () => {
       return;
     }
 
-    // ✅ FIX: Check if already marked BEFORE face recognition
     if (todayAttendance.includes(selectedCourse)) {
       setMessage('⚠️ You have already marked attendance for this course today.');
       setMessageType('warning');
@@ -481,7 +453,6 @@ const MarkAttendance = () => {
         return;
       }
 
-      // ✅ DOUBLE CHECK: Verify again in case state changed
       const { data: latestAttendance } = await supabase
         .from('attendance')
         .select('id')
@@ -495,7 +466,6 @@ const MarkAttendance = () => {
         setMessageType('warning');
         addDebug('⚠️ Already marked (database check)');
         setIsMarking(false);
-        // Refresh state
         await fetchTodayAttendance();
         return;
       }
@@ -503,7 +473,6 @@ const MarkAttendance = () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
-      // Check for existing absent record
       const { data: existingAbsent } = await supabase
         .from('attendance')
         .select('id')
@@ -513,7 +482,6 @@ const MarkAttendance = () => {
         .gte('date', today.toISOString());
 
       if (existingAbsent && existingAbsent.length > 0) {
-        // Update absent to present
         const { error: updateError } = await supabase
           .from('attendance')
           .update({ status: 'present' })
@@ -525,7 +493,6 @@ const MarkAttendance = () => {
         }
         addDebug('✅ Updated absent to present');
       } else {
-        // Insert new present record
         const { error: insertError } = await supabase
           .from('attendance')
           .insert({
@@ -542,11 +509,9 @@ const MarkAttendance = () => {
         addDebug('✅ Inserted present record');
       }
 
-      // ✅ FIX: Refresh all data after marking
       await fetchTodayAttendance();
       await fetchCourseStatuses();
       
-      // ✅ FIX: Update local state with refreshed data
       const updatedPresent = await supabase
         .from('attendance')
         .select('course_id')
@@ -565,7 +530,6 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
-      // Auto-select next available course
       const availableCourses = courses.filter(c => {
         const status = getCourseStatus(c);
         return status.canMark && !newMarked.includes(c.id);
@@ -598,6 +562,7 @@ const MarkAttendance = () => {
     return courses.find(c => c.id === selectedCourse);
   };
 
+  // ✅ SEPARATE COURSES BY STATUS
   const lecturingCourses = courses.filter(c => {
     const status = getCourseStatus(c);
     return status.canMark && !todayAttendance.includes(c.id);
@@ -629,61 +594,6 @@ const MarkAttendance = () => {
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
 
-        <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
-          <div className="d-flex justify-content-between align-items-center">
-            <h6 className="mb-0">
-              📊 Debug ({absentDebug.length} messages) 
-              {absentCheckDone && <Badge bg="success" className="ms-2">✅ Done</Badge>}
-              {!absentCheckDone && <Badge bg="warning" className="ms-2">⏳ Loading...</Badge>}
-            </h6>
-            <div>
-              <Button 
-                variant="outline-primary" 
-                size="sm" 
-                className="me-1"
-                onClick={async () => {
-                  setAbsentDebug([]);
-                  await fetchCourses();
-                  await fetchTodayAttendance();
-                  await fetchCourseStatuses();
-                  await markAbsentForOffCourses();
-                  setAbsentCheckDone(true);
-                }}
-              >
-                🔄 Re-run
-              </Button>
-              <Button 
-                variant="outline-danger" 
-                size="sm"
-                onClick={() => setAbsentDebug([])}
-              >
-                🗑️ Clear
-              </Button>
-            </div>
-          </div>
-          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
-            {absentDebug.length === 0 ? (
-              <div className="text-muted">Waiting...</div>
-            ) : (
-              absentDebug.map((msg, idx) => (
-                <div key={idx} style={{ 
-                  color: msg.isError ? '#dc3545' : '#28a745',
-                  borderBottom: '1px solid #e9ecef',
-                  padding: '2px 0'
-                }}>
-                  <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
-                  {msg.data && (
-                    <details>
-                      <summary style={{ cursor: 'pointer', color: '#007bff' }}>📄 Data</summary>
-                      <pre style={{ fontSize: '10px', margin: '5px 0', padding: '5px', background: '#fff', borderRadius: '3px', overflow: 'auto', maxHeight: '80px' }}>{msg.data}</pre>
-                    </details>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </Card>
-
         {message && (
           <Alert 
             variant={messageType || 'info'} 
@@ -696,6 +606,7 @@ const MarkAttendance = () => {
         )}
 
         <Row>
+          {/* Camera Section */}
           <Col md={7}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">📹 Live Camera</h5>
@@ -759,6 +670,27 @@ const MarkAttendance = () => {
                 </div>
               </div>
 
+              {/* Progress Bar */}
+              {(lecturingCourses.length + markedCourses.length) > 0 && (
+                <div className="mt-2">
+                  <div className="d-flex justify-content-between align-items-center mb-1">
+                    <span className="small">Today's Progress</span>
+                    <span className="small fw-bold">{progressPercentage}%</span>
+                  </div>
+                  <div className="progress" style={{ height: '8px', borderRadius: '10px' }}>
+                    <div 
+                      className="progress-bar bg-success" 
+                      style={{ 
+                        width: `${progressPercentage}%`,
+                        borderRadius: '10px',
+                        transition: 'width 0.5s ease'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Mark Attendance Button */}
               {lecturingCourses.length > 0 ? (
                 <Button
                   variant="success"
@@ -793,146 +725,158 @@ const MarkAttendance = () => {
             </Card>
           </Col>
 
+          {/* Course Status Section */}
           <Col md={5}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
-              <h5 className="mb-3">📚 Course Selection</h5>
+              <h5 className="mb-3">📚 Course Status</h5>
 
-              {(lecturingCourses.length + markedCourses.length) > 0 && (
-                <div className="mb-3">
-                  <div className="d-flex justify-content-between align-items-center mb-1">
-                    <span className="small">Today's Progress</span>
-                    <span className="small fw-bold">{progressPercentage}%</span>
+              {/* ✅ LECTURING IN PROGRESS - GREEN */}
+              <div className="mb-3">
+                <div className="d-flex justify-content-between align-items-center">
+                  <Form.Label className="fw-bold mb-0" style={{ color: '#28a745' }}>
+                    📖 Lecture in Progress
+                  </Form.Label>
+                  <Badge bg="success">{lecturingCourses.length}</Badge>
+                </div>
+                {lecturingCourses.length === 0 ? (
+                  <div className="p-2 text-muted small" style={{ border: '1px dashed #ced4da', borderRadius: '8px', background: '#f8f9fa' }}>
+                    No courses currently lecturing
                   </div>
-                  <div className="progress" style={{ height: '8px', borderRadius: '10px' }}>
-                    <div 
-                      className="progress-bar bg-success" 
-                      style={{ 
-                        width: `${progressPercentage}%`,
-                        borderRadius: '10px',
-                        transition: 'width 0.5s ease'
-                      }}
-                    />
+                ) : (
+                  <div className="p-2" style={{ border: '1px solid #28a745', borderRadius: '8px', background: '#f0fff4' }}>
+                    {lecturingCourses.map((course) => (
+                      <div 
+                        key={course.id} 
+                        className={`d-flex justify-content-between align-items-center py-1 px-2 rounded ${selectedCourse === course.id ? 'bg-success text-white' : ''}`}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setSelectedCourse(course.id)}
+                      >
+                        <span className="small">{course.course_code} - {course.course_name}</span>
+                        {selectedCourse === course.id && <Badge bg="light" text="dark">Selected</Badge>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <small className="text-muted">Click a course to select it for marking</small>
+              </div>
+
+              {/* ✅ ALREADY MARKED - GREEN */}
+              <div className="mb-3">
+                <div className="d-flex justify-content-between align-items-center">
+                  <Form.Label className="fw-bold mb-0" style={{ color: '#6c757d' }}>
+                    ✅ Already Marked
+                  </Form.Label>
+                  <Badge bg="success">{markedCourses.length}</Badge>
+                </div>
+                {markedCourses.length === 0 ? (
+                  <div className="p-2 text-muted small" style={{ border: '1px dashed #ced4da', borderRadius: '8px', background: '#f8f9fa' }}>
+                    No courses marked today
+                  </div>
+                ) : (
+                  <div className="p-2" style={{ border: '1px solid #28a745', borderRadius: '8px', background: '#f0fff4' }}>
+                    {markedCourses.map((course) => (
+                      <div key={course.id} className="d-flex justify-content-between align-items-center py-1 px-2">
+                        <span className="small text-muted">{course.course_code} - {course.course_name}</span>
+                        <Badge bg="success">✅ Done</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ❌ CLASS ENDED / ABSENT - RED */}
+              <div className="mb-3">
+                <div className="d-flex justify-content-between align-items-center">
+                  <Form.Label className="fw-bold mb-0" style={{ color: '#dc3545' }}>
+                    ❌ Class Ended (Absent)
+                  </Form.Label>
+                  <Badge bg="danger">{endedCourses.length}</Badge>
+                </div>
+                {endedCourses.length === 0 ? (
+                  <div className="p-2 text-muted small" style={{ border: '1px dashed #ced4da', borderRadius: '8px', background: '#f8f9fa' }}>
+                    No missed courses today
+                  </div>
+                ) : (
+                  <div className="p-2" style={{ border: '1px solid #dc3545', borderRadius: '8px', background: '#fff5f5' }}>
+                    {endedCourses.map((course) => (
+                      <div key={course.id} className="d-flex justify-content-between align-items-center py-1 px-2">
+                        <span className="small text-muted">{course.course_code} - {course.course_name}</span>
+                        <Badge bg="danger">❌ Missed</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <small className="text-muted">You missed these courses. Class has ended.</small>
+              </div>
+
+              {/* ⏳ NOT STARTED YET - YELLOW */}
+              <div className="mb-3">
+                <div className="d-flex justify-content-between align-items-center">
+                  <Form.Label className="fw-bold mb-0" style={{ color: '#ffc107' }}>
+                    ⏳ Not Started Yet
+                  </Form.Label>
+                  <Badge bg="warning">{notStartedCourses.length}</Badge>
+                </div>
+                {notStartedCourses.length === 0 ? (
+                  <div className="p-2 text-muted small" style={{ border: '1px dashed #ced4da', borderRadius: '8px', background: '#f8f9fa' }}>
+                    All courses have started
+                  </div>
+                ) : (
+                  <div className="p-2" style={{ border: '1px solid #ffc107', borderRadius: '8px', background: '#fff8e1' }}>
+                    {notStartedCourses.map((course) => (
+                      <div key={course.id} className="d-flex justify-content-between align-items-center py-1 px-2">
+                        <span className="small text-muted">{course.course_code} - {course.course_name}</span>
+                        <Badge bg="warning">⏳ Waiting</Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <small className="text-muted">These courses haven't started yet today.</small>
+              </div>
+
+              {/* ⏳ INACTIVE COURSES - GREY */}
+              {inactiveCourses.length > 0 && (
+                <div className="mb-2">
+                  <div className="d-flex justify-content-between align-items-center">
+                    <Form.Label className="fw-bold mb-0" style={{ color: '#6c757d' }}>
+                      ⏳ Inactive
+                    </Form.Label>
+                    <Badge bg="secondary">{inactiveCourses.length}</Badge>
+                  </div>
+                  <div className="p-2" style={{ border: '1px solid #ced4da', borderRadius: '8px', background: '#f8f9fa' }}>
+                    {inactiveCourses.map((course) => (
+                      <div key={course.id} className="d-flex justify-content-between align-items-center py-1 px-2">
+                        <span className="small text-muted">{course.course_code} - {course.course_name}</span>
+                        <Badge bg="secondary">⏳ Inactive</Badge>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
 
-              {courses.length === 0 ? (
-                <Alert variant="info" className="mt-3">
-                  You are not enrolled in any courses.
-                </Alert>
-              ) : (
-                <>
-                  {lecturingCourses.length > 0 && (
-                    <div className="mb-3">
-                      <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
-                        📖 Lecture in Progress ({lecturingCourses.length})
-                      </Form.Label>
-                      <Form.Select
-                        value={selectedCourse}
-                        onChange={(e) => setSelectedCourse(e.target.value)}
-                        disabled={isMarking}
-                        style={{ fontSize: '1rem', padding: '10px', borderRadius: '10px', borderColor: '#28a745' }}
-                      >
-                        <option value="">-- Select --</option>
-                        {lecturingCourses.map((course) => (
-                          <option key={course.id} value={course.id}>
-                            {course.course_code} - {course.course_name} 📖
-                          </option>
-                        ))}
-                      </Form.Select>
-                      <small className="text-muted">Currently lecturing</small>
+              {/* Selected Course Info */}
+              {getSelectedCourseDetails() && lecturingCourses.length > 0 && selectedCourse && (
+                <div className="p-2 bg-light rounded mt-2" style={{ border: '2px solid #28a745', borderRadius: '10px' }}>
+                  <div className="d-flex justify-content-between align-items-center">
+                    <div>
+                      <strong style={{ color: '#28a745' }}>{getSelectedCourseDetails().course_code}</strong>
+                      <br />
+                      <small className="text-muted">{getSelectedCourseDetails().course_name}</small>
+                      <br />
+                      <small className="text-muted">👨‍🏫 {getSelectedCourseDetails().lecturer || 'N/A'}</small>
                     </div>
-                  )}
+                    <Badge bg="success">📖 In Progress</Badge>
+                  </div>
+                </div>
+              )}
 
-                  {markedCourses.length > 0 && (
-                    <div className="mb-3">
-                      <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
-                        ✅ Already Marked ({markedCourses.length})
-                      </Form.Label>
-                      <div className="p-2 bg-light rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #dee2e6', borderRadius: '10px' }}>
-                        {markedCourses.map((course) => (
-                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
-                            <Badge bg="success" className="p-1">✅</Badge>
-                            <span className="text-muted small">{course.course_code}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {endedCourses.length > 0 && (
-                    <div className="mb-3">
-                      <Form.Label className="fw-bold" style={{ color: '#dc3545' }}>
-                        ❌ Class Ended ({endedCourses.length})
-                      </Form.Label>
-                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #dc3545', borderRadius: '10px', background: '#fff5f5' }}>
-                        {endedCourses.map((course) => (
-                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
-                            <Badge bg="danger" className="p-1">❌</Badge>
-                            <span className="text-muted small">{course.course_code}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <small className="text-muted">Class ended</small>
-                    </div>
-                  )}
-
-                  {notStartedCourses.length > 0 && (
-                    <div className="mb-3">
-                      <Form.Label className="fw-bold" style={{ color: '#ffc107' }}>
-                        ⏳ Not Started ({notStartedCourses.length})
-                      </Form.Label>
-                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #ffc107', borderRadius: '10px', background: '#fff8e1' }}>
-                        {notStartedCourses.map((course) => (
-                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
-                            <Badge bg="warning" className="p-1">⏳</Badge>
-                            <span className="text-muted small">{course.course_code}</span>
-                          </div>
-                        ))}
-                      </div>
-                      <small className="text-muted">Not started yet</small>
-                    </div>
-                  )}
-
-                  {inactiveCourses.length > 0 && (
-                    <div className="mb-3">
-                      <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
-                        ⏳ Inactive ({inactiveCourses.length})
-                      </Form.Label>
-                      <div className="p-2 rounded" style={{ maxHeight: '80px', overflowY: 'auto', border: '1px solid #ced4da', borderRadius: '10px', background: '#f8f9fa' }}>
-                        {inactiveCourses.map((course) => (
-                          <div key={course.id} className="d-flex align-items-center gap-2 py-1">
-                            <Badge bg="secondary" className="p-1">⏳</Badge>
-                            <span className="text-muted small">{course.course_code}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {getSelectedCourseDetails() && lecturingCourses.length > 0 && selectedCourse && (
-                    <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745', borderRadius: '10px' }}>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div>
-                          <strong style={{ color: '#28a745' }}>{getSelectedCourseDetails().course_code}</strong>
-                          <br />
-                          <small className="text-muted">{getSelectedCourseDetails().course_name}</small>
-                          <br />
-                          <small className="text-muted">👨‍🏫 {getSelectedCourseDetails().lecturer || 'N/A'}</small>
-                        </div>
-                        <Badge bg="success">📖 In Progress</Badge>
-                      </div>
-                    </div>
-                  )}
-
-                  {lecturingCourses.length === 0 && markedCourses.length === 0 && courses.length > 0 && (
-                    <div className="text-center py-3">
-                      <div style={{ fontSize: '40px' }}>⏳</div>
-                      <p className="text-muted mt-2">No courses available</p>
-                      <small className="text-muted">Check back later</small>
-                    </div>
-                  )}
-                </>
+              {/* No Courses Available */}
+              {lecturingCourses.length === 0 && markedCourses.length === 0 && courses.length > 0 && (
+                <div className="text-center py-3">
+                  <div style={{ fontSize: '40px' }}>⏳</div>
+                  <p className="text-muted mt-2">No courses are currently available.</p>
+                  <small className="text-muted">Check back later when a course starts.</small>
+                </div>
               )}
             </Card>
           </Col>
