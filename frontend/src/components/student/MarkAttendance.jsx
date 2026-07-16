@@ -49,16 +49,15 @@ const MarkAttendance = () => {
       setModelsLoading(false);
       
       await startWebcam();
+      
+      // ✅ FIX: Wait for ALL data to load before running absent check
       await fetchCourses();
       await fetchTodayAttendance();
       await fetchCourseStatuses();
       
-      // ✅ FIX: Run absent check AFTER courses are loaded
-      // Using setTimeout to ensure all states are updated
-      setTimeout(async () => {
-        await markAbsentForOffCourses();
-        setAbsentCheckDone(true);
-      }, 2000);
+      // ✅ FIX: Run absent check AFTER all data is loaded
+      await markAbsentForOffCourses();
+      setAbsentCheckDone(true);
       
       addDebug('✅ Initialization complete');
     };
@@ -161,9 +160,6 @@ const MarkAttendance = () => {
       const absentRecords = (data || []).filter(a => a.status === 'absent');
       if (absentRecords.length > 0) {
         addDebug(`⚠️ Found ${absentRecords.length} existing absent records`);
-        absentRecords.forEach(r => {
-          addDebug(`   ❌ ${r.course_id}`);
-        });
       }
       
       return data || [];
@@ -205,7 +201,7 @@ const MarkAttendance = () => {
     }
   };
 
-  // ✅ FIXED: Mark absent with auto-run
+  // ✅ FIXED: Mark absent - runs after all data is loaded
   const markAbsentForOffCourses = async () => {
     try {
       addDebug('🔵 ===== STARTING ABSENT CHECK =====');
@@ -227,7 +223,6 @@ const MarkAttendance = () => {
       
       let absentCount = 0;
       let alreadyMarkedCount = 0;
-      let notApplicableCount = 0;
       let errorCount = 0;
       
       addAbsentDebug('📋 Course Status Summary:');
@@ -304,11 +299,9 @@ const MarkAttendance = () => {
 
             if (insertError) {
               addAbsentDebug(`   ❌ INSERT ERROR for ${course.course_code}: ${insertError.message}`, true);
-              addDebug(`❌ Insert error for ${course.course_code}: ${insertError.message}`, true);
               errorCount++;
             } else {
               addAbsentDebug(`   ✅ SUCCESS: Marked ABSENT for ${course.course_code}`);
-              addDebug(`✅ Marked ABSENT for: ${course.course_code} (${reason})`);
               absentCount++;
             }
           } catch (err) {
@@ -321,15 +314,10 @@ const MarkAttendance = () => {
       addAbsentDebug('📊 ==== ABSENT CHECK SUMMARY ====');
       addAbsentDebug(`✅ New Absents: ${absentCount}`);
       addAbsentDebug(`⏳ Already Marked: ${alreadyMarkedCount}`);
-      addAbsentDebug(`⏳ Not Applicable: ${notApplicableCount}`);
       addAbsentDebug(`❌ Errors: ${errorCount}`);
-      
-      addDebug(`📊 Absent Summary: ${absentCount} new, ${alreadyMarkedCount} already, ${errorCount} errors`);
       
       if (absentCount > 0) {
         addDebug(`✅ Marked ${absentCount} course(s) as ABSENT`);
-      } else {
-        addDebug(`ℹ️ No new absent courses to mark`);
       }
       
       await fetchTodayAttendance();
@@ -397,6 +385,7 @@ const MarkAttendance = () => {
     };
   };
 
+  // ✅ FIXED: Handle marking attendance with proper refresh
   const handleMarkAttendance = async () => {
     if (!selectedCourse) {
       setMessage('⚠️ Please select a course.');
@@ -508,6 +497,7 @@ const MarkAttendance = () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       
+      // ✅ FIX: Check for existing absent record to update
       const { data: existingAbsent } = await supabase
         .from('attendance')
         .select('id')
@@ -543,8 +533,13 @@ const MarkAttendance = () => {
         }
       }
 
+      // ✅ FIX: Update local state AND refresh from database
       const updatedMarked = [...todayAttendance, selectedCourse];
       setTodayAttendance(updatedMarked);
+      
+      // ✅ FIX: Refresh attendance data from database to ensure sync
+      await fetchTodayAttendance();
+      
       addDebug('✅ Attendance saved successfully');
 
       setMessage('✅ Attendance marked successfully! ✓');
@@ -555,9 +550,10 @@ const MarkAttendance = () => {
         addDebug(`✅ ${course.course_code} marked present`);
       }
 
+      // Auto-select next available course
       const availableCourses = courses.filter(c => {
         const status = getCourseStatus(c);
-        return status.canMark && !updatedMarked.includes(c.id);
+        return status.canMark && !todayAttendance.includes(c.id);
       });
       
       if (availableCourses.length > 0) {
@@ -617,7 +613,6 @@ const MarkAttendance = () => {
       <div className="animate-fade-in">
         <h2 className="mb-4">📷 Mark Attendance</h2>
 
-        {/* 🔍 ABSENT DEBUG PANEL */}
         <Card className="mb-3 p-2" style={{ background: '#f8f9fa', border: '2px solid #007bff' }}>
           <div className="d-flex justify-content-between align-items-center">
             <h6 className="mb-0">
@@ -635,7 +630,7 @@ const MarkAttendance = () => {
                   markAbsentForOffCourses();
                 }}
               >
-                🔄 Re-run Absent Check
+                🔄 Re-run
               </Button>
               <Button 
                 variant="outline-danger" 
@@ -646,7 +641,7 @@ const MarkAttendance = () => {
               </Button>
             </div>
           </div>
-          <div style={{ maxHeight: '200px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
+          <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '11px', fontFamily: 'monospace', marginTop: '5px' }}>
             {absentDebug.length === 0 ? (
               <div className="text-muted">Waiting for absent check...</div>
             ) : (
@@ -659,8 +654,8 @@ const MarkAttendance = () => {
                   <span style={{ color: '#6c757d' }}>[{msg.timestamp}]</span> {msg.message}
                   {msg.data && (
                     <details>
-                      <summary style={{ cursor: 'pointer', color: '#007bff' }}>📄 Show data</summary>
-                      <pre style={{ fontSize: '10px', margin: '5px 0', padding: '5px', background: '#fff', borderRadius: '3px', overflow: 'auto', maxHeight: '100px' }}>{msg.data}</pre>
+                      <summary style={{ cursor: 'pointer', color: '#007bff' }}>📄 Data</summary>
+                      <pre style={{ fontSize: '10px', margin: '5px 0', padding: '5px', background: '#fff', borderRadius: '3px', overflow: 'auto', maxHeight: '80px' }}>{msg.data}</pre>
                     </details>
                   )}
                 </div>
@@ -681,7 +676,6 @@ const MarkAttendance = () => {
         )}
 
         <Row>
-          {/* Camera Section */}
           <Col md={7}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">📹 Live Camera</h5>
@@ -745,7 +739,6 @@ const MarkAttendance = () => {
                 </div>
               </div>
 
-              {/* Mark Attendance Button */}
               {lecturingCourses.length > 0 ? (
                 <Button
                   variant="success"
@@ -780,12 +773,10 @@ const MarkAttendance = () => {
             </Card>
           </Col>
 
-          {/* Controls Section */}
           <Col md={5}>
             <Card className="p-3 shadow-lg" style={{ borderRadius: '15px' }}>
               <h5 className="mb-3">📚 Course Selection</h5>
 
-              {/* Progress Bar */}
               {(lecturingCourses.length + markedCourses.length) > 0 && (
                 <div className="mb-3">
                   <div className="d-flex justify-content-between align-items-center mb-1">
@@ -811,7 +802,6 @@ const MarkAttendance = () => {
                 </Alert>
               ) : (
                 <>
-                  {/* Lecturing Courses */}
                   {lecturingCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#28a745' }}>
@@ -830,11 +820,10 @@ const MarkAttendance = () => {
                           </option>
                         ))}
                       </Form.Select>
-                      <small className="text-muted">These courses are currently lecturing. Mark your attendance now!</small>
+                      <small className="text-muted">These courses are currently lecturing.</small>
                     </div>
                   )}
 
-                  {/* Already Marked */}
                   {markedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
@@ -851,7 +840,6 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* Class Ended */}
                   {endedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#dc3545' }}>
@@ -865,11 +853,10 @@ const MarkAttendance = () => {
                           </div>
                         ))}
                       </div>
-                      <small className="text-muted">You missed these courses. Class has ended.</small>
+                      <small className="text-muted">You missed these courses.</small>
                     </div>
                   )}
 
-                  {/* Not Started Yet */}
                   {notStartedCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#ffc107' }}>
@@ -883,11 +870,10 @@ const MarkAttendance = () => {
                           </div>
                         ))}
                       </div>
-                      <small className="text-muted">These courses haven't started yet today.</small>
+                      <small className="text-muted">These courses haven't started yet.</small>
                     </div>
                   )}
 
-                  {/* Inactive Courses */}
                   {inactiveCourses.length > 0 && (
                     <div className="mb-3">
                       <Form.Label className="fw-bold" style={{ color: '#6c757d' }}>
@@ -904,7 +890,6 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* Selected Course Info */}
                   {getSelectedCourseDetails() && lecturingCourses.length > 0 && selectedCourse && (
                     <div className="p-2 bg-light rounded" style={{ border: '2px solid #28a745', borderRadius: '10px' }}>
                       <div className="d-flex justify-content-between align-items-center">
@@ -920,12 +905,11 @@ const MarkAttendance = () => {
                     </div>
                   )}
 
-                  {/* No Courses Available */}
                   {lecturingCourses.length === 0 && markedCourses.length === 0 && courses.length > 0 && (
                     <div className="text-center py-3">
                       <div style={{ fontSize: '40px' }}>⏳</div>
                       <p className="text-muted mt-2">No courses are currently available.</p>
-                      <small className="text-muted">Check back later when a course starts.</small>
+                      <small className="text-muted">Check back later.</small>
                     </div>
                   )}
                 </>
