@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../../utils/supabaseClient';
-import { import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from '../../utils/supabaseClient';
 import { 
   Container, Row, Col, Card, Table, Button, Form, 
   Badge, Alert, Spinner, Modal, Tab, Tabs 
