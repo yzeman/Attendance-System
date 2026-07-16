@@ -57,7 +57,7 @@ const StudentDashboard = () => {
       }
       setSecondSemesterEnabled(adminPref === 'Second');
 
-      // 3. Get student's semester preference from database
+      // 3. Get student's semester preference
       let studentPref = userData?.semester_preference || 'First';
       
       if (studentPref === 'Second' && adminPref !== 'Second') {
@@ -101,7 +101,7 @@ const StudentDashboard = () => {
         setCourses([]);
       }
 
-      // 7. Fetch student's attendance records
+      // 7. Fetch student's attendance records (ALL - present and absent)
       const { data: attendanceData, error: attError } = await supabase
         .from('attendance')
         .select('*, course:course_id(course_code, course_name)')
@@ -112,6 +112,7 @@ const StudentDashboard = () => {
         console.error('❌ Attendance fetch error:', attError);
       } else {
         console.log('✅ Attendance fetched:', attendanceData?.length || 0, 'records');
+        console.log('📊 Attendance statuses:', attendanceData?.map(a => a.status));
       }
       setAttendance(attendanceData || []);
 
@@ -125,21 +126,25 @@ const StudentDashboard = () => {
         filteredCourseIds.includes(a.course_id)
       );
 
-      // 10. Calculate statistics
+      // 10. Calculate statistics (TOTAL)
       const presentCount = filteredAttendance.filter(a => a.status === 'present').length;
       const absentCount = filteredAttendance.filter(a => a.status === 'absent').length;
       const totalClasses = filteredAttendance.length;
       const percentage = totalClasses > 0 ? Math.round((presentCount / totalClasses) * 100) : 0;
 
-      // 11. Get today's attendance (filtered by semester)
+      // 11. Get TODAY's attendance (filtered by semester)
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayAttendance = filteredAttendance.filter(a => new Date(a.date) >= today);
+      
+      // Count today's present and absent
       const todayPresent = todayAttendance.filter(a => a.status === 'present').length;
       const todayAbsent = todayAttendance.filter(a => a.status === 'absent').length;
       
-      // 12. Get today's courses (distinct)
-      const todayCourseIds = [...new Set(todayAttendance.map(a => a.course_id))];
+      console.log('📊 Today attendance:', { todayPresent, todayAbsent, total: todayAttendance.length });
+      
+      // 12. Get today's attended courses (present)
+      const todayCourseIds = [...new Set(todayAttendance.filter(a => a.status === 'present').map(a => a.course_id))];
       let todayCoursesData = [];
       if (todayCourseIds.length > 0) {
         const { data: data } = await supabase
@@ -150,12 +155,7 @@ const StudentDashboard = () => {
       }
       setTodayCourses(todayCoursesData);
 
-      // 13. Get today's absent courses (only active courses in current semester)
-      const allActiveCourseIds = coursesData
-        .filter(c => c.semester === studentPref && c.is_active !== false && c.attendance_enabled !== false)
-        .map(c => c.id);
-      
-      // Get courses that are absent today (status = 'absent')
+      // 13. Get today's absent courses (status = 'absent')
       const absentCourseIds = todayAttendance
         .filter(a => a.status === 'absent')
         .map(a => a.course_id);
@@ -165,6 +165,7 @@ const StudentDashboard = () => {
         c.semester === studentPref
       );
       setTodayAbsent(absentCourses);
+      console.log('📊 Today absent courses:', absentCourses.map(c => c.course_code));
 
       setStats({
         totalPresent: presentCount,
