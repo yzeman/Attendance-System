@@ -7,78 +7,90 @@ const MyCourses = () => {
   const [loading, setLoading] = useState(true);
   const [semesterPreference, setSemesterPreference] = useState('First');
   const [secondSemesterEnabled, setSecondSemesterEnabled] = useState(false);
-  const [adminSemesterLoaded, setAdminSemesterLoaded] = useState(false);
-  const user = JSON.parse(localStorage.getItem('user'));
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
+    const storedUser = JSON.parse(localStorage.getItem('user'));
+    setUser(storedUser);
     fetchData();
   }, []);
 
   const fetchData = async () => {
     setLoading(true);
     try {
+      const storedUser = JSON.parse(localStorage.getItem('user'));
+      if (!storedUser) {
+        setLoading(false);
+        return;
+      }
+
       // 1. Get student's enrolled course IDs and semester preference
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('enrolled_courses, semester_preference')
-        .eq('id', user.id)
+        .eq('id', storedUser.id)
         .single();
 
-      if (userError) throw userError;
+      if (userError) {
+        console.error('❌ User fetch error:', userError);
+        setLoading(false);
+        return;
+      }
 
-      // 2. Get admin's semester preference (from admin user)
-      // First, get the admin user ID
+      // 2. Get admin's semester preference
       const { data: adminData, error: adminError } = await supabase
         .from('users')
-        .select('id, semester_preference')
+        .select('semester_preference')
         .eq('role', 'admin')
         .limit(1)
         .single();
 
-      if (adminError) {
-        console.error('Error fetching admin semester preference:', adminError);
-        // Default to false if admin not found
-        setSecondSemesterEnabled(false);
-      } else {
-        // Check if admin has second semester enabled
-        const adminPref = adminData?.semester_preference || 'First';
-        setSecondSemesterEnabled(adminPref === 'Second');
+      let adminPref = 'First';
+      if (!adminError && adminData) {
+        adminPref = adminData.semester_preference || 'First';
       }
-      setAdminSemesterLoaded(true);
+      setSecondSemesterEnabled(adminPref === 'Second');
 
-      // 3. Get student's semester preference
-      let pref = userData?.semester_preference || 'First';
+      // 3. Get student's semester preference from database
+      let studentPref = userData?.semester_preference || 'First';
       
-      // If second semester is OFF in admin, force student to First semester
-      if (secondSemesterEnabled === false && pref === 'Second') {
-        pref = 'First';
-        // Update student's preference to match admin
+      // If student prefers Second but admin has it OFF, force to First
+      if (studentPref === 'Second' && adminPref !== 'Second') {
+        studentPref = 'First';
+        // Update student's preference in database
         await supabase
           .from('users')
           .update({ semester_preference: 'First' })
-          .eq('id', user.id);
-        
-        const updatedUser = { ...user, semester_preference: 'First' };
-        localStorage.setItem('user', JSON.stringify(updatedUser));
+          .eq('id', storedUser.id);
       }
       
-      setSemesterPreference(pref);
+      setSemesterPreference(studentPref);
 
-      // 4. Fetch courses
-      if (userData?.enrolled_courses?.length > 0) {
-        const { data: coursesData, error: courseError } = await supabase
+      // 4. Update localStorage
+      const updatedUser = { ...storedUser, semester_preference: studentPref };
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+
+      // 5. Fetch courses
+      let enrolledIds = userData?.enrolled_courses || [];
+      enrolledIds = [...new Set(enrolledIds)];
+
+      let coursesData = [];
+      if (enrolledIds.length > 0) {
+        const { data: data, error: courseError } = await supabase
           .from('courses')
           .select('*')
-          .in('id', userData.enrolled_courses);
+          .in('id', enrolledIds);
 
-        if (courseError) throw courseError;
-        setCourses(coursesData || []);
+        if (!courseError) {
+          coursesData = data || [];
+        }
+        setCourses(coursesData);
       } else {
         setCourses([]);
       }
 
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('❌ Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -91,27 +103,39 @@ const MyCourses = () => {
       return;
     }
 
+    // Update state immediately for UI responsiveness
     setSemesterPreference(semester);
+
+    // Update localStorage
+    const storedUser = JSON.parse(localStorage.getItem('user'));
+    if (storedUser) {
+      const updatedUser = { ...storedUser, semester_preference: semester };
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+    }
     
     try {
+      // Save to database
       const { error } = await supabase
         .from('users')
         .update({ semester_preference: semester })
         .eq('id', user.id);
 
-      if (error) throw error;
-      
-      const updatedUser = { ...user, semester_preference: semester };
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      if (error) {
+        console.error('❌ Error saving semester preference:', error);
+        // Revert if error
+        setSemesterPreference(semester === 'Second' ? 'First' : 'Second');
+        alert('❌ Failed to save preference. Please try again.');
+      } else {
+        console.log('✅ Semester preference saved:', semester);
+      }
 
     } catch (error) {
-      console.error('Error saving semester preference:', error);
+      console.error('❌ Error saving semester preference:', error);
     }
   };
 
-  // Filter courses by selected semester (only if second semester is enabled)
+  // Filter courses by selected semester
   const filteredCourses = courses.filter(c => {
-    // If student is trying to view second semester but admin has it OFF
     if (semesterPreference === 'Second' && !secondSemesterEnabled) {
       return false;
     }
